@@ -1,0 +1,257 @@
+"""Formal experiment suite driver (P1-P5).
+
+Runs each experiment configuration STRICTLY SEQUENTIALLY, one isolated
+subprocess per run (``run_one``), never two WRS processes at once. Every Beam run
+uses workers=4; Exact A* is serial. Each run writes its own JSON and appends a
+row to the single summary CSV; nothing is overwritten; failed runs are recorded.
+
+This driver DOES NOT run smoke / reproducibility / validation tests. It only
+launches the formal P1-P5 runs.
+
+Usage:
+    # everything, sequentially
+    python -m sealp.examples.layout.experiments.run_suite --priority all
+
+    # a single priority
+    python -m sealp.examples.layout.experiments.run_suite --priority p1
+
+    # just print the exact per-run commands without executing
+    python -m sealp.examples.layout.experiments.run_suite --priority all --print-only
+
+Output layout:
+    sealp/examples/layout/experiments/_output/
+        p1/  p2/  p3/  p4/  p5/            # one JSON per run
+        experiments_summary.csv            # appended, never overwritten
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+from typing import Dict, List, Optional
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+OUT_ROOT = os.path.join(_THIS_DIR, "_output")
+CSV_PATH = os.path.join(OUT_ROOT, "experiments_summary.csv")
+
+# ----------------------------------------------------------------------------
+# shared run.py passthrough fragments
+# ----------------------------------------------------------------------------
+ASM_CHAIR = "sealp/assembly_sequence/_demo_output/yuanchair.asmdef"
+GRASP_CHAIR = "sealp/examples/grasp/yuanchair_grasp"
+ASM_TOWER = "sealp/assembly_sequence/_demo_output/topdown_tower.asmdef"
+GRASP_TOWER = "sealp/examples/grasp/tower_grasp"
+
+CHAIR_PARTS_4LEG = "seat,leg_bl,leg_br,leg_fl,leg_fr"
+CHAIR_PARTS_REDUCED = "seat,leg_bl,leg_br"
+TOWER_PARTS = "base_plate,post_br,post_fr,post_bl,post_fl,middle_plate,top_cross"
+
+# full 4-leg chair, single fixed center (P1/P2: controlled search variable only)
+CHAIR_4LEG_SINGLE = [
+    "--asmdef", ASM_CHAIR, "--grasp-dir", GRASP_CHAIR,
+    "--part-order", CHAIR_PARTS_4LEG, "--goal-pos", "0.373,0.0,0.0",
+    "--mode", "beam", "--center-search", "single",
+    "--grid-spacing", "0.06", "--cand-per-part", "10", "--beam-width", "6",
+    "--poses-per-xy", "1", "--yaw-step-deg", "20", "--witness-retries", "5",
+    "--workers", "4", "--parallel-level", "auto",
+]
+
+# reduced discrete chair instance (P3/P5: exact A* tractable, identical domain
+# for exact vs beam because no cell cap is applied).
+CHAIR_REDUCED_DISCRETE = [
+    "--asmdef", ASM_CHAIR, "--grasp-dir", GRASP_CHAIR,
+    "--part-order", CHAIR_PARTS_REDUCED, "--goal-pos", "0.373,0.0,0.0",
+    "--center-search", "single", "--discrete-domain",
+    "--grid-spacing", "0.09", "--exact-cell-cap", "0", "--max-nodes", "500000",
+    "--beam-width", "6", "--poses-per-xy", "1", "--yaw-step-deg", "0",
+    "--witness-retries", "5", "--workers", "4", "--parallel-level", "auto",
+]
+
+# cross-assembly: frozen full pipeline (backward beam, coarse-to-fine, workers=4)
+_COARSE_TO_FINE = [
+    "--mode", "beam", "--center-search", "coarse-to-fine",
+    "--coarse-grid-n", "4", "--coarse-top-k", "4",
+    "--refine-grid-n", "3", "--refine-spacing-factor", "0.5",
+    "--grid-spacing", "0.06", "--cand-per-part", "10", "--beam-width", "6",
+    "--poses-per-xy", "1", "--yaw-step-deg", "20", "--witness-retries", "5",
+    "--workers", "4", "--parallel-level", "auto",
+]
+CHAIR_CROSS = ["--asmdef", ASM_CHAIR, "--grasp-dir", GRASP_CHAIR,
+               "--part-order", CHAIR_PARTS_4LEG, "--goal-pos", "0.373,0.0,0.0"] + _COARSE_TO_FINE
+TOWER_CROSS = ["--asmdef", ASM_TOWER, "--grasp-dir", GRASP_TOWER,
+               "--part-order", TOWER_PARTS, "--goal-pos", "0.373,0.0,0.0"] + _COARSE_TO_FINE
+
+SEEDS_HEADLINE = [0, 1, 2]
+
+
+# ----------------------------------------------------------------------------
+# config builders -- each returns a list of run specs
+# ----------------------------------------------------------------------------
+def _spec(priority, variant, task, seed, passthrough,
+          order=None, state=None, hall="on", prop="on", mode=None,
+          needs_ref=False) -> Dict:
+    pt = list(passthrough)
+    if mode is not None:
+        pt = _override_mode(pt, mode)
+    return {
+        "priority": priority, "variant": variant, "task": task, "seed": seed,
+        "order": order, "state": state, "hall": hall, "prop": prop,
+        "passthrough": pt, "needs_ref": needs_ref,
+    }
+
+
+def _override_mode(passthrough: List[str], mode: str) -> List[str]:
+    out = list(passthrough)
+    if "--mode" in out:
+        i = out.index("--mode")
+        out[i + 1] = mode
+    else:
+        out += ["--mode", mode]
+    return out
+
+
+def build_p1() -> List[Dict]:
+    specs = []
+    for seed in SEEDS_HEADLINE:
+        for order in ("backward", "forward"):
+            specs.append(_spec("p1", order, "chair", seed, CHAIR_4LEG_SINGLE,
+                               order=order, state="sequential"))
+    return specs
+
+
+def build_p2() -> List[Dict]:
+    specs = []
+    for seed in SEEDS_HEADLINE:
+        for state in ("sequential", "static_start", "static_final"):
+            specs.append(_spec("p2", state, "chair", seed, CHAIR_4LEG_SINGLE,
+                               order="backward", state=state))
+    return specs
+
+
+def build_p3() -> List[Dict]:
+    # exact first (produces the optimum), then beam with ref-cost = exact optimum.
+    return [
+        _spec("p3", "exact", "chair_reduced", 0, CHAIR_REDUCED_DISCRETE, mode="exact"),
+        _spec("p3", "beam", "chair_reduced", 0, CHAIR_REDUCED_DISCRETE, mode="beam",
+              needs_ref=True),
+    ]
+
+
+def build_p4() -> List[Dict]:
+    return [
+        _spec("p4", "chair", "chair", 0, CHAIR_CROSS),
+        _spec("p4", "tower", "tower", 0, TOWER_CROSS),
+    ]
+
+
+def build_p5() -> List[Dict]:
+    # Hall / propagation are only active in the EXACT A* solver.
+    return [
+        _spec("p5", "full", "chair_reduced", 0, CHAIR_REDUCED_DISCRETE, mode="exact",
+              hall="on", prop="on"),
+        _spec("p5", "no_hall", "chair_reduced", 0, CHAIR_REDUCED_DISCRETE, mode="exact",
+              hall="off", prop="on"),
+        _spec("p5", "no_prop", "chair_reduced", 0, CHAIR_REDUCED_DISCRETE, mode="exact",
+              hall="on", prop="off"),
+        _spec("p5", "no_both", "chair_reduced", 0, CHAIR_REDUCED_DISCRETE, mode="exact",
+              hall="off", prop="off"),
+    ]
+
+
+BUILDERS = {"p1": build_p1, "p2": build_p2, "p3": build_p3,
+            "p4": build_p4, "p5": build_p5}
+
+
+# ----------------------------------------------------------------------------
+# execution
+# ----------------------------------------------------------------------------
+def _run_one_cmd(spec: Dict, ref_cost: Optional[float]) -> List[str]:
+    out_dir = os.path.join(OUT_ROOT, spec["priority"])
+    cmd = [sys.executable, "-X", "utf8", "-m",
+           "sealp.examples.layout.experiments.run_one",
+           "--priority", spec["priority"], "--variant", spec["variant"],
+           "--task", spec["task"], "--seed", str(spec["seed"]),
+           "--out-dir", out_dir, "--csv", CSV_PATH]
+    if spec.get("order"):
+        cmd += ["--exp-order", spec["order"]]
+    if spec.get("state"):
+        cmd += ["--exp-state", spec["state"]]
+    if spec.get("hall") == "off":
+        cmd += ["--exp-hall", "off"]
+    if spec.get("prop") == "off":
+        cmd += ["--exp-prop", "off"]
+    if ref_cost is not None:
+        cmd += ["--ref-cost", str(ref_cost)]
+    cmd += ["--"] + list(spec["passthrough"])
+    return cmd
+
+
+def _execute(specs: List[Dict], print_only: bool) -> None:
+    os.makedirs(OUT_ROOT, exist_ok=True)
+    last_cost: Optional[float] = None
+    for i, spec in enumerate(specs, 1):
+        ref = last_cost if spec.get("needs_ref") else None
+        cmd = _run_one_cmd(spec, ref)
+        header = f"[{i}/{len(specs)}] {spec['priority']} {spec['variant']} " \
+                 f"{spec['task']} seed={spec['seed']}"
+        if print_only:
+            print(f"# {header}")
+            print(" ".join(_quote(c) for c in cmd))
+            print()
+            continue
+        print("\n" + "#" * 72)
+        print(header)
+        print("#" * 72)
+        env = dict(os.environ)
+        env["PYTHONIOENCODING"] = "utf-8"
+        proc = subprocess.run(cmd, env=env, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace")
+        sys.stdout.write(proc.stdout or "")
+        sys.stderr.write(proc.stderr or "")
+        last_cost = _parse_cost(proc.stdout or "")
+
+
+def _parse_cost(stdout: str) -> Optional[float]:
+    for line in reversed(stdout.splitlines()):
+        if line.startswith("RUN_ONE_COST="):
+            val = line.split("=", 1)[1].strip()
+            try:
+                return float(val)
+            except ValueError:
+                return None
+    return None
+
+
+def _quote(s: str) -> str:
+    return f'"{s}"' if (" " in s or "," in s) else s
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--priority", required=True,
+                    choices=["p1", "p2", "p3", "p4", "p5", "all"])
+    ap.add_argument("--print-only", action="store_true",
+                    help="print the exact per-run commands, do not execute.")
+    a = ap.parse_args(argv)
+
+    if a.priority == "all":
+        specs: List[Dict] = []
+        for key in ("p1", "p2", "p3", "p4", "p5"):
+            specs += BUILDERS[key]()
+    else:
+        specs = BUILDERS[a.priority]()
+
+    print(f"Suite: {a.priority}  ({len(specs)} runs)  "
+          f"{'PRINT-ONLY' if a.print_only else 'SEQUENTIAL EXECUTION'}")
+    print(f"Output root : {OUT_ROOT}")
+    print(f"Summary CSV : {CSV_PATH}")
+    _execute(specs, a.print_only)
+    if not a.print_only:
+        print(f"\nDONE. Summary CSV: {CSV_PATH}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

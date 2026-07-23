@@ -132,9 +132,9 @@ if __name__ == '__main__':
 
     gripper = PiperGripper(cdmesh_type=mcm.const.CDMeshType.OBB)
     # gripper.fix_to(pos=np.array([0, .3, .2]), rotmat=rm.rotmat_from_euler(math.pi / 3, math.pi / 3, math.pi / 3))
-    gripper.change_jaw_width(0)
+    gripper.change_jaw_width(0.03)
     print(f"当前夹爪开口宽度: {gripper.get_jaw_width():.3f} m")
     gripper.gen_stickmodel().attach_to(base)
-    gripper.gen_meshmodel(toggle_tcp_frame=True, toggle_jnt_frames=False, toggle_cdprim=False,alpha=1).attach_to(base)
+    gripper.gen_meshmodel(toggle_tcp_frame=True, toggle_jnt_frames=False, toggle_cdprim=True,alpha=1).attach_to(base)
 
     base.run()
