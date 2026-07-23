@@ -671,25 +671,33 @@ def _patch_rrt_for_l3() -> None:
     _patched_plan._tower_l3_patched = True
     RRTConnect.plan = _patched_plan
 
-def _transport_kwargs(place_approach_dir=None, place_depart_dir=None):
-    """通用 tower pick-place 方向。
+def _transport_kwargs(place_approach_dir=None, place_depart_dir=None,
+                      pick_depart_dist=None, place_approach_dist=None,
+                      place_depart_dist=None):
+    """通用 tower pick-place 方向 / 线性段距离。
 
     pick_depart 固定为 +Z 抬升(安全撤离)。
     place_approach / place_depart 若给定了 override(见 ``_assembly_mating_dirs``,
     L3/RRT 阶段按装配定义动态计算的插入轴), 则用 override; 否则回退到默认
     "从上往下放置(-Z)、向上撤离(+Z)"。
+
+    ``*_dist`` 为线性段距离 override; 为 None 时使用模块默认常量。L3 重试时
+    通过逐步缩短这些距离来提升 IK 线性可达性(见 ``_l3_plan_part``)。
     """
     pa = (PLACE_APPROACH_DIR if place_approach_dir is None
           else np.asarray(place_approach_dir, dtype=float))
     pd = (PLACE_DEPART_DIR if place_depart_dir is None
           else np.asarray(place_depart_dir, dtype=float))
+    pdd = PICK_DEPART_DIST if pick_depart_dist is None else float(pick_depart_dist)
+    pad = PLACE_APPROACH_DIST if place_approach_dist is None else float(place_approach_dist)
+    pdd2 = PLACE_DEPART_DIST if place_depart_dist is None else float(place_depart_dist)
     return dict(
         pick_depart_direction=PICK_DEPART_DIR,
-        pick_depart_distance=PICK_DEPART_DIST,
+        pick_depart_distance=pdd,
         place_approach_direction_list=[pa],
-        place_approach_distance_list=[PLACE_APPROACH_DIST],
+        place_approach_distance_list=[pad],
         place_depart_direction_list=[pd],
-        place_depart_distance_list=[PLACE_DEPART_DIST],
+        place_depart_distance_list=[pdd2],
     )
 
 
@@ -2870,10 +2878,13 @@ class WeightedInitialLayoutSearcher:
 
         按优先级(高->低)确定 d_insert:
 
-          1) 显式 ``insertion_axis_local`` (asmdef 中该步给定的局部插接轴):
+          1) 显式 ``insertion_axis`` (asmdef 中该步给定的**世界坐标系**插接轴):
+                 d_insert = normalize(insertion_axis)   # 直接使用, 不做坐标变换
+             约定: ``insertion_axis`` 就是"零件被插入时末端平移的世界方向"
+             (place-approach 世界方向)。例如 ``[0,0,1]`` 表示沿世界 +Z 插入,
+             撤离/抬升沿 ``-Z``。
+          1') 兼容旧字段 ``insertion_axis_local`` (零件目标局部坐标系):
                  d_insert = normalize(gr @ insertion_axis_local)
-             约定: ``insertion_axis_local`` 是"零件在其目标局部坐标系下被插入
-             的平移方向"(即 place-approach 的局部表示)。
           2) 推断的子件局部 +Z 轴: axis = gr[:, 2]; 由 ``rel_pos`` 在该轴上的
              投影符号确定零件坐落在父件哪一侧, 从该侧沿 ``-axis`` 插入。
              投影≈0(偏移垂直于轴)时回退为"从上方(-世界Z)接近"。
@@ -2893,7 +2904,17 @@ class WeightedInitialLayoutSearcher:
         try:
             gr = np.asarray(gr, dtype=float).reshape(3, 3)
 
-            # ---- priority 1: explicit per-relation insertion_axis_local ----
+            # ---- priority 1: explicit WORLD-frame insertion_axis ----
+            # 直接作为世界方向使用, 不经 R_goal 变换。
+            d_world = getattr(step, "insertion_axis", None)
+            if d_world is not None:
+                d_world = np.asarray(d_world, dtype=float).reshape(3)
+                n = float(np.linalg.norm(d_world))
+                if n >= 1e-9:
+                    d_insert = d_world / n
+                    return d_insert, -d_insert
+
+            # ---- priority 1': legacy LOCAL-frame insertion_axis_local ----
             d_local = getattr(step, "insertion_axis_local", None)
             if d_local is not None:
                 d_local = np.asarray(d_local, dtype=float).reshape(3)
@@ -2954,51 +2975,66 @@ class WeightedInitialLayoutSearcher:
             print(f"  [L3] {pid} dynamic mating dir: "
                   f"approach={np.round(place_approach_dir, 3).tolist()} "
                   f"depart={np.round(place_depart_dir, 3).tolist()}")
-        tk = _transport_kwargs(place_approach_dir=place_approach_dir,
-                               place_depart_dir=place_depart_dir)
-
-        try:
+        # L3 线性段可达性重试:从标称距离开始, 逐步缩短 pick-depart /
+        # place-approach / place-depart 的直线段长度。较短的直线段更容易在
+        # 抓取构型附近求得连续 IK, 从而让本可行的布局通过 L3(而不是因为
+        # 5cm 抬升在接近可达边界处 IK 无解而误判失败)。方向不变。
+        dist_schedule = [
+            (PICK_DEPART_DIST, PLACE_APPROACH_DIST, PLACE_DEPART_DIST),
+            (0.03, 0.03, 0.03),
+            (0.02, 0.02, 0.02),
+            (0.015, 0.015, 0.015),
+            (0.01, 0.01, 0.01),
+        ]
+        last_err = "no plan"
+        for pdd, pad, pdd2 in dist_schedule:
+            tk = _transport_kwargs(place_approach_dir=place_approach_dir,
+                                   place_depart_dir=place_depart_dir,
+                                   pick_depart_dist=pdd,
+                                   place_approach_dist=pad,
+                                   place_depart_dist=pdd2)
             try:
-                res = transport.plan(
-                    obj_cmodel=obj_cm,
-                    grasp_collection=gc,
-                    goal_pose_list=[(np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))],
-                    obstacle_list=obs,
-                    grasp_obstacle_list=placement_obs,
-                    approach_distance=APPROACH_DIST,
-                    depart_distance=PICK_DEPART_DIST,
-                    linear_granularity=LINEAR_GRANULARITY,
-                    **tk,
-                )
-            except TypeError:
-                # 兼容旧版 TransportPrimitive.plan(无 grasp_obstacle_list)
-                res = transport.plan(
-                    obj_cmodel=obj_cm,
-                    grasp_collection=gc,
-                    goal_pose_list=[(np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))],
-                    obstacle_list=obs,
-                    approach_distance=APPROACH_DIST,
-                    depart_distance=PICK_DEPART_DIST,
-                    linear_granularity=LINEAR_GRANULARITY,
-                    **tk,
-                )
-        except Exception as e:
-            layout.l3_fail_reason = (
-                f"L3 step={step_idx} {pid} {arm_tag}: "
-                f"exception {type(e).__name__}: {e!r}"
-            )
-            if verbose:
-                print(f"  [FAIL] {layout.l3_fail_reason}")
-            return False
+                try:
+                    res = transport.plan(
+                        obj_cmodel=obj_cm,
+                        grasp_collection=gc,
+                        goal_pose_list=[(np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))],
+                        obstacle_list=obs,
+                        grasp_obstacle_list=placement_obs,
+                        approach_distance=APPROACH_DIST,
+                        depart_distance=pdd,
+                        linear_granularity=LINEAR_GRANULARITY,
+                        **tk,
+                    )
+                except TypeError:
+                    # 兼容旧版 TransportPrimitive.plan(无 grasp_obstacle_list)
+                    res = transport.plan(
+                        obj_cmodel=obj_cm,
+                        grasp_collection=gc,
+                        goal_pose_list=[(np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))],
+                        obstacle_list=obs,
+                        approach_distance=APPROACH_DIST,
+                        depart_distance=pdd,
+                        linear_granularity=LINEAR_GRANULARITY,
+                        **tk,
+                    )
+            except Exception as e:
+                last_err = f"exception {type(e).__name__}: {e!r}"
+                if verbose:
+                    print(f"  [L3] {pid} plan raised at dist={pdd:.3f}: {last_err}")
+                continue
 
-        if not bool(getattr(res, "success", False)):
-            err = getattr(res, "error_msg", "") or "no plan"
-            layout.l3_fail_reason = f"L3 step={step_idx} {pid} {arm_tag}: {err}"
-            if verbose:
-                print(f"  [FAIL] {layout.l3_fail_reason}")
-            return False
+            if bool(getattr(res, "success", False)):
+                if verbose and pdd != PICK_DEPART_DIST:
+                    print(f"  [L3] {pid} succeeded with shortened linear "
+                          f"segments (dist={pdd:.3f}).")
+                return True
+            last_err = getattr(res, "error_msg", "") or "no plan"
 
-        return True
+        layout.l3_fail_reason = f"L3 step={step_idx} {pid} {arm_tag}: {last_err}"
+        if verbose:
+            print(f"  [FAIL] {layout.l3_fail_reason}")
+        return False
 
 
     # --------------------------------------------------------
