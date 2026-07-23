@@ -43,6 +43,12 @@ from sealp.examples.layout.bsfs.seeding import center_id, seed_everything, task_
 # never interact with the assembly workspace or the robot.
 _FAR_OFFSET = np.array([10.0, 10.0], dtype=float)
 
+# Module-global side channel: experimental_search_site runs in the MAIN process
+# (candidates parallelism), so run_one (same process) can read extra metrics not
+# surfaced by the frozen run.main() result -- e.g. the number of complete leaves
+# the beam returned. Reset per subprocess (module re-imported fresh each run).
+LAST_RUN_STATS: Dict[str, float] = {"complete_leaves": 0}
+
 
 def _assembly_index(pick_order: List[str]) -> Dict[str, int]:
     return {pid: i for i, pid in enumerate(pick_order)}
@@ -233,7 +239,11 @@ def experimental_search_site(searcher, args, station, mode, stats, verbose=True,
                   f"(+{pid}): beam={len(beam)} best[g={top['g']:.4f} "
                   f"clr={top['min_clear']:.3f} manip={top['min_manip']:.4f}]")
 
-    return [nd["assign"] for nd in beam]
+    result = [nd["assign"] for nd in beam]
+    # complete leaves = number of complete assignments returned by this site.
+    LAST_RUN_STATS["complete_leaves"] = (
+        LAST_RUN_STATS.get("complete_leaves", 0) + len(result))
+    return result
 
 
 def _certify_local(oracle, searcher, station, preassembled_pid, task) -> Dict:

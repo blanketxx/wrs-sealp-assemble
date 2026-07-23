@@ -53,10 +53,11 @@ CSV_COLUMNS = [
     "objective_cost", "ref_cost", "optimality_gap",
     "runtime_s", "time_to_first_feasible_s",
     "oracle_certifications", "node_expansions",
-    "witness_calls", "deferred_witness_attempts",
+    "complete_leaves", "witness_calls", "deferred_witness_attempts",
     "hard_prunes", "hall_prunes", "propagation_prunes",
     "min_common_grasp", "num_parts",
-    "assembly_center", "layout_fingerprint",
+    "l3_staging_aware", "l3_fail_step", "l3_fail_reason",
+    "center_source", "assembly_center", "layout_fingerprint",
     "output_json", "fail_reason",
 ]
 
@@ -107,6 +108,60 @@ def _apply_patches(order: Optional[str], state: Optional[str],
         search.propagate_domains = (
             lambda remaining, cells, occ, foot_radius, extra_block_mask=0: dict(cells))
         print("[run_one] domain propagation DISABLED (ablation)")
+
+
+def _parse_l3_fail_step(reason: str) -> str:
+    """Extract the failing step index from an l3_fail_reason of the form
+    'L3 step={idx} {pid} ...: {err}'. Returns '' if not parseable."""
+    import re
+    m = re.search(r"step=(\d+)", reason or "")
+    return m.group(1) if m else ""
+
+
+def _staging_aware_l3(passthrough: List[str], out_json: str,
+                      seed: int) -> Dict[str, str]:
+    """Replay the selected layout (no search) and return the staging_aware L3
+    diagnostics: {verdict: PASS/FAIL/NA, fail_step, fail_reason}. Reuses the
+    frozen witness + validator; no algorithmic change."""
+    out = {"verdict": "NA", "fail_step": "", "fail_reason": ""}
+    try:
+        import numpy as np
+        import sealp.examples.layout.bsfs.run as run
+        with open(out_json, encoding="utf-8") as fh:
+            result = json.load(fh)
+        best_layout = result.get("best_layout", {})
+        preassembled = result.get("preassembled_part")
+        center = np.asarray(result["assembly_center"], dtype=float)
+        args = run.parse_args(list(passthrough) + ["--seed", str(seed)])
+        searcher = run._build_searcher(args)
+        assign = {}
+        for pid in searcher.part_order:
+            if pid == preassembled or pid not in best_layout:
+                continue
+            e = best_layout[pid]
+            assign[pid] = {"xy": [float(e["init_pos"][0]), float(e["init_pos"][1])],
+                           "rot_name": str(e["rot_name"]), "cost": 0.0}
+        searcher._set_assembly_station(center)
+        status, cand, _ = run.robust_evaluate_layout(
+            searcher, assign, preassembled, center, args,
+            list(searcher.part_order), run._new_stats())
+        if status != "SUCCESS":
+            out["fail_reason"] = "L2 reconstruction failed"
+            return out
+        ok = bool(searcher.validate_full_sequence_l3(
+            cand, obstacle_mode="staging_aware", verbose=False))
+        if ok:
+            out["verdict"] = "PASS"
+        else:
+            out["verdict"] = "FAIL"
+            reason = str(getattr(cand, "l3_fail_reason", "") or "")
+            out["fail_reason"] = reason
+            out["fail_step"] = _parse_l3_fail_step(reason)
+        return out
+    except Exception as exc:  # noqa: BLE001
+        print(f"[run_one] L3 check error: {type(exc).__name__}: {exc}")
+        out["fail_reason"] = f"{type(exc).__name__}: {exc}"
+        return out
 
 
 def _extract_row(result: Optional[Dict], meta: Dict, ref_cost: Optional[float],
@@ -170,6 +225,12 @@ def main(argv=None) -> int:
     ap.add_argument("--exp-prop", choices=["on", "off"], default="on")
     ap.add_argument("--ref-cost", type=float, default=None,
                     help="reference optimum cost for optimality_gap (P3 beam vs exact).")
+    ap.add_argument("--l3-check", choices=["none", "staging_aware"], default="none",
+                    help="after a successful L2 run, replay the selected layout and "
+                         "record the staging_aware full-sequence L3 verdict.")
+    ap.add_argument("--center-source", default="",
+                    help="human-readable provenance of the (predetermined) assembly "
+                         "center; recorded verbatim in the CSV for auditability.")
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--csv", required=True)
     ap.add_argument("run_args", nargs=argparse.REMAINDER,
@@ -220,6 +281,31 @@ def main(argv=None) -> int:
         print(f"[run_one] FAILED after {elapsed:.1f}s: {fail_reason}")
 
     row = _extract_row(result, meta, a.ref_cost, success, fail_reason)
+
+    # predetermined assembly-center provenance (recorded verbatim; the realized
+    # numeric center is in the assembly_center column so the two can be compared
+    # across backward/forward variants).
+    row["center_source"] = a.center_source
+
+    # extra metric surfaced by the experimental search (same process as main).
+    try:
+        import sealp.examples.layout.experiments.exp_search as exp_search
+        cl = exp_search.LAST_RUN_STATS.get("complete_leaves")
+        if cl:
+            row["complete_leaves"] = int(cl)
+    except Exception:
+        pass
+
+    # optional staging_aware L3 diagnostics on the final selected layout.
+    if a.l3_check == "staging_aware" and success:
+        print("[run_one] running staging_aware L3 check on selected layout ...")
+        l3 = _staging_aware_l3(passthrough, out_json, a.seed)
+        row["l3_staging_aware"] = l3["verdict"]
+        row["l3_fail_step"] = l3["fail_step"]
+        row["l3_fail_reason"] = l3["fail_reason"]
+        print(f"[run_one] staging_aware L3 = {l3['verdict']} "
+              f"(step={l3['fail_step'] or '-'}, reason={l3['fail_reason'] or '-'})")
+
     _append_csv(a.csv, row)
     print(f"[run_one] recorded -> {a.csv} (success={success})")
     # machine-readable markers so a suite runner can chain results (e.g. feed the

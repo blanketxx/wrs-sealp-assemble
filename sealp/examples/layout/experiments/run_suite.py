@@ -45,32 +45,28 @@ ASM_TOWER = "sealp/assembly_sequence/_demo_output/topdown_tower.asmdef"
 GRASP_TOWER = "sealp/examples/grasp/tower_grasp"
 
 CHAIR_PARTS_4LEG = "seat,leg_bl,leg_br,leg_fl,leg_fr"
-CHAIR_PARTS_REDUCED = "seat,leg_bl,leg_br"
+CHAIR_PARTS_3LEG = "seat,leg_bl,leg_br,leg_fl"   # seat + 3 picked legs (P1 stat / P2 stress)
+CHAIR_PARTS_REDUCED = "seat,leg_bl,leg_br"       # 2 legs (P3/P5 exact-tractable discrete)
 TOWER_PARTS = "base_plate,post_br,post_fr,post_bl,post_fl,middle_plate,top_cross"
 
-# P1/P2 headline (full 4-leg, single fixed center) -- kept for reference / P2.
-CHAIR_4LEG_SINGLE = [
-    "--asmdef", ASM_CHAIR, "--grasp-dir", GRASP_CHAIR,
-    "--part-order", CHAIR_PARTS_4LEG, "--goal-pos", "0.373,0.0,0.0",
-    "--mode", "beam", "--center-search", "single",
-    "--grid-spacing", "0.06", "--cand-per-part", "10", "--beam-width", "6",
-    "--poses-per-xy", "1", "--yaw-step-deg", "20", "--witness-retries", "5",
-    "--workers", "4", "--parallel-level", "auto",
-]
-
-# P1 local tractable config: FULL 4-leg chair, single fixed center, but the
-# lighter grid/beam used by the local bsfs_repro_* runs (0.07 / cand=8 / beam=4 /
-# retries=3). Much faster than the 0.06/10/6/5 headline config while still
-# assembling all four legs; the backward-vs-forward search-order variable is
-# unchanged.
-CHAIR_P1_LOCAL = [
-    "--asmdef", ASM_CHAIR, "--grasp-dir", GRASP_CHAIR,
-    "--part-order", CHAIR_PARTS_4LEG, "--goal-pos", "0.373,0.0,0.0",
-    "--mode", "beam", "--center-search", "single",
+# Shared light single-center beam fragment (fast: 0.07 grid / cand=8 / beam=4 /
+# retries=3). Reused by the reduced-chair statistical runs and the one full 4-leg
+# headline run so the ONLY difference between P1/P2 cells is the experimental
+# variable (search order / state model), never the beam configuration.
+_LIGHT_SINGLE = [
+    "--mode", "beam", "--center-search", "single", "--goal-pos", "0.373,0.0,0.0",
     "--grid-spacing", "0.07", "--cand-per-part", "8", "--beam-width", "4",
     "--poses-per-xy", "1", "--yaw-step-deg", "20", "--witness-retries", "3",
     "--workers", "4", "--parallel-level", "auto",
 ]
+
+# P1/P2 reduced statistical instance: seat + 3 picked legs, single fixed center.
+CHAIR_3LEG_SINGLE = ["--asmdef", ASM_CHAIR, "--grasp-dir", GRASP_CHAIR,
+                     "--part-order", CHAIR_PARTS_3LEG] + _LIGHT_SINGLE
+
+# P1/P2 headline instance: full 4-leg chair, single fixed center (seed 0 only).
+CHAIR_4LEG_SINGLE = ["--asmdef", ASM_CHAIR, "--grasp-dir", GRASP_CHAIR,
+                     "--part-order", CHAIR_PARTS_4LEG] + _LIGHT_SINGLE
 
 # reduced discrete chair instance (P3/P5: exact A* tractable, identical domain
 # for exact vs beam because no cell cap is applied).
@@ -97,7 +93,16 @@ CHAIR_CROSS = ["--asmdef", ASM_CHAIR, "--grasp-dir", GRASP_CHAIR,
 TOWER_CROSS = ["--asmdef", ASM_TOWER, "--grasp-dir", GRASP_TOWER,
                "--part-order", TOWER_PARTS, "--goal-pos", "0.373,0.0,0.0"] + _COARSE_TO_FINE
 
-SEEDS_HEADLINE = [0, 1, 2]
+SEEDS_STAT = [0, 1, 2]   # reduced-instance statistical seeds
+
+# Predetermined assembly center for the single-center P1/P2 runs: run.py's
+# `--center-search single` derives the center as clip(goal_pos, feasible_bounds)
+# BEFORE any search, so it is fixed and identical for Backward vs Forward (and
+# across all state models) on the same instance -- never selected after
+# observing a method's result. Recorded verbatim in the CSV `center_source`.
+FIXED_CENTER_SRC = ("single@goal_pos=(0.373,0.0,0.0); predetermined "
+                    "clip(goal_pos, feasible_bounds) before search; "
+                    "identical for all variants of the same instance")
 
 
 # ----------------------------------------------------------------------------
@@ -105,14 +110,15 @@ SEEDS_HEADLINE = [0, 1, 2]
 # ----------------------------------------------------------------------------
 def _spec(priority, variant, task, seed, passthrough,
           order=None, state=None, hall="on", prop="on", mode=None,
-          needs_ref=False) -> Dict:
+          needs_ref=False, l3_check=False, center_source="") -> Dict:
     pt = list(passthrough)
     if mode is not None:
         pt = _override_mode(pt, mode)
     return {
         "priority": priority, "variant": variant, "task": task, "seed": seed,
         "order": order, "state": state, "hall": hall, "prop": prop,
-        "passthrough": pt, "needs_ref": needs_ref,
+        "passthrough": pt, "needs_ref": needs_ref, "l3_check": l3_check,
+        "center_source": center_source,
     }
 
 
@@ -127,20 +133,41 @@ def _override_mode(passthrough: List[str], mode: str) -> List[str]:
 
 
 def build_p1() -> List[Dict]:
+    # Statistical comparison on the reduced chair (seat + 3 legs), fixed center,
+    # seeds 0/1/2, ONLY the search order varies. Plus ONE full 4-leg headline
+    # case at seed 0 (backward vs forward).
     specs = []
-    for seed in SEEDS_HEADLINE:
+    for seed in SEEDS_STAT:
         for order in ("backward", "forward"):
-            specs.append(_spec("p1", order, "chair", seed, CHAIR_P1_LOCAL,
-                               order=order, state="sequential"))
+            specs.append(_spec("p1", order, "chair_3leg", seed, CHAIR_3LEG_SINGLE,
+                               order=order, state="sequential",
+                               center_source=FIXED_CENTER_SRC))
+    for order in ("backward", "forward"):
+        specs.append(_spec("p1", f"headline_{order}", "chair_4leg", 0, CHAIR_4LEG_SINGLE,
+                           order=order, state="sequential",
+                           center_source=FIXED_CENTER_SRC))
     return specs
 
 
 def build_p2() -> List[Dict]:
+    # Sequence-state comparison: the reduced chair (seat + 3 legs) and one full
+    # 4-leg case are each run under sequential / static_start / static_final with
+    # the Backward order fixed -- only the state/obstacle model varies. This TESTS
+    # whether the three dynamic-state phenomena arise (growing partial assembly
+    # blocks a later op; removed staging parts release space; remaining staged
+    # parts block an earlier op); it does NOT presume they do. Which phenomena
+    # actually occur is decided by inspecting the results. Each run records the
+    # predicted feasibility (success) AND the final staging_aware L3 diagnostics
+    # (verdict / fail step / fail reason).
     specs = []
-    for seed in SEEDS_HEADLINE:
-        for state in ("sequential", "static_start", "static_final"):
-            specs.append(_spec("p2", state, "chair", seed, CHAIR_4LEG_SINGLE,
-                               order="backward", state=state))
+    for state in ("sequential", "static_start", "static_final"):
+        specs.append(_spec("p2", state, "chair_3leg", 0, CHAIR_3LEG_SINGLE,
+                           order="backward", state=state, l3_check=True,
+                           center_source=FIXED_CENTER_SRC))
+    for state in ("sequential", "static_start", "static_final"):
+        specs.append(_spec("p2", f"full_{state}", "chair_4leg", 0, CHAIR_4LEG_SINGLE,
+                           order="backward", state=state, l3_check=True,
+                           center_source=FIXED_CENTER_SRC))
     return specs
 
 
@@ -154,9 +181,11 @@ def build_p3() -> List[Dict]:
 
 
 def build_p4() -> List[Dict]:
+    # Full Chair + Tower (frozen backward beam, coarse-to-fine), seed 0. The
+    # staging_aware full-sequence L3 is validated separately on each final layout.
     return [
-        _spec("p4", "chair", "chair", 0, CHAIR_CROSS),
-        _spec("p4", "tower", "tower", 0, TOWER_CROSS),
+        _spec("p4", "chair", "chair", 0, CHAIR_CROSS, l3_check=True),
+        _spec("p4", "tower", "tower", 0, TOWER_CROSS, l3_check=True),
     ]
 
 
@@ -198,6 +227,10 @@ def _run_one_cmd(spec: Dict, ref_cost: Optional[float]) -> List[str]:
         cmd += ["--exp-prop", "off"]
     if ref_cost is not None:
         cmd += ["--ref-cost", str(ref_cost)]
+    if spec.get("l3_check"):
+        cmd += ["--l3-check", "staging_aware"]
+    if spec.get("center_source"):
+        cmd += ["--center-source", spec["center_source"]]
     cmd += ["--"] + list(spec["passthrough"])
     return cmd
 
