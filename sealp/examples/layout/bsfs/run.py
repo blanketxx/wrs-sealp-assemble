@@ -37,6 +37,22 @@ import time
 from concurrent.futures import ProcessPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
+# ---------------------------------------------------------------------------
+# Deterministic numerics (MUST run before numpy imports its BLAS backend).
+# OpenBLAS/MKL use multi-threaded, non-associative float reductions whose
+# summation order depends on the live thread count, so an unpinned main process
+# (e.g. 24 BLAS threads) and a pinned worker (1 thread) disagree at the ULP
+# level -- enough to flip a near-tie yaw-refinement score and make ``--workers 1``
+# vs ``--workers 4`` pick a different final heading for the same layout. Pinning
+# EVERY process (the main process AND every spawn-reimported worker) to a single
+# BLAS/OpenMP thread fixes the reduction order and makes the whole pipeline
+# bit-reproducible across worker counts. The affected ops are tiny 6-DOF
+# Jacobian/SVD computations, so the single-thread cost is negligible.
+# ---------------------------------------------------------------------------
+for _thr_var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+                 "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+    os.environ[_thr_var] = "1"
+
 import numpy as np
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))

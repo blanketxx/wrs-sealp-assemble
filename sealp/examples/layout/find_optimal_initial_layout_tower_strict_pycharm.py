@@ -111,6 +111,18 @@ PLACE_DEPART_DIST = 0.05
 APPROACH_DIST = 0.0
 LINEAR_GRANULARITY = 0.04
 
+# ---- L2 local pick-depart motion gate (correctness repair) -----------------
+# Endpoint IK feasibility does NOT imply the prescribed short +Z pick-depart
+# segment is feasible. This gate validates that segment with continuous
+# Cartesian interpolation + continuity-seeded IK (same direction/distance
+# convention as L3), so L2 / the beam oracle stop accepting placements whose
+# only common grasps cannot actually be lifted. Joint margin is used only as a
+# cheap pre-filter/diagnostic, never as a feasibility proof.
+L2_DEPART_CHECK = True          # master switch for the continuous depart gate
+L2_DEPART_PREFILTER_CAP = 16    # #grasps scored by joint margin (cheap pre-filter)
+L2_DEPART_MOTION_K = 8          # #top-margin grasps that get the continuous IK check
+L2_DEPART_KEEP = 4              # early-exit once this many grasps survive the gate
+
 DEFAULT_TABLE_MARGIN = 0.06
 DEFAULT_TABLE_CLEARANCE = 0.003
 DEFAULT_MAX_ROT_CANDIDATES = 12
@@ -2239,6 +2251,119 @@ class WeightedInitialLayoutSearcher:
 
         return valid_union, f"ok dirs={','.join(pass_dirs)}"
 
+    @staticmethod
+    def _joint_margin(arm, jv) -> float:
+        """Normalised distance of ``jv`` to the nearest joint limit in [0, 0.5].
+
+        0 == on a limit, 0.5 == mid-range. Cheap diagnostic / pre-filter only;
+        NEVER used alone as a motion-feasibility proof (a mid-range grasp can
+        still fail the continuous depart IK, and vice versa).
+        """
+        try:
+            jr = np.asarray(arm.jnt_ranges, dtype=float)
+            jv = np.asarray(jv, dtype=float).reshape(-1)
+            lo, hi = jr[:, 0], jr[:, 1]
+            span = np.maximum(hi - lo, 1e-9)
+            frac = np.minimum(jv - lo, hi - jv) / span
+            return float(np.min(frac))
+        except Exception:
+            return 0.0
+
+    def _l2_pick_depart_motion_gids(
+        self,
+        arm,
+        gc: GraspCollection,
+        sp: np.ndarray,
+        sr: np.ndarray,
+        gids: List[int],
+    ) -> Tuple[List[int], str]:
+        """Continuous +Z pick-depart segment IK gate (matches the L3 convention).
+
+        Closes the gap ``endpoint IK feasible  !=>  prescribed local pick-depart
+        motion feasible``. For each candidate common grasp we:
+
+          1. solve IK at the grasp (pick) TCP (deterministic HOME warm-start) and
+             record a cheap joint-limit margin (pre-filter/diagnostic);
+          2. interpolate a straight ``PICK_DEPART_DIR`` (+Z) lift of
+             ``PICK_DEPART_DIST`` at ``LINEAR_GRANULARITY`` steps, solving IK
+             continuously (each waypoint seeded from the previous solution, same
+             as WRS ``gen_linear_depart``);
+          3. keep the grasp only if EVERY interpolated pose has valid continuous
+             IK.
+
+        Grasps are pre-ordered by joint margin so the most promising are checked
+        first; the scan is bounded (``L2_DEPART_PREFILTER_CAP`` /
+        ``L2_DEPART_MOTION_K``) and early-exits after ``L2_DEPART_KEEP``
+        survivors. Returns ``(surviving_gids, message)``; empty list == no grasp
+        admits the prescribed pick-depart motion (a deterministic local-motion
+        infeasibility for this placement).
+        """
+        if not L2_DEPART_CHECK:
+            return list(gids), "disabled"
+        if not gids:
+            return [], "empty_input_gids"
+
+        sp = np.asarray(sp, dtype=float).reshape(3)
+        sr = np.asarray(sr, dtype=float).reshape(3, 3)
+        lift_dir = PICK_DEPART_DIR / max(float(np.linalg.norm(PICK_DEPART_DIR)), 1e-9)
+        dist = float(PICK_DEPART_DIST)
+        n_steps = max(1, int(np.ceil(dist / max(LINEAR_GRANULARITY, 1e-6))))
+
+        def _grasp(gid):
+            return gc._grasp_list[gid] if hasattr(gc, "_grasp_list") else gc[gid]
+
+        # ---- phase 1: cheap joint-margin pre-filter (solve IK at pick TCP) ----
+        scored = []  # (margin, gid, jv_pick, ac_pos, ac_rot)
+        for gid in list(gids)[:L2_DEPART_PREFILTER_CAP]:
+            try:
+                grasp = _grasp(gid)
+                ac_pos = sr @ np.asarray(grasp.ac_pos, dtype=float) + sp
+                ac_rot = sr @ np.asarray(grasp.ac_rotmat, dtype=float)
+                arm.goto_given_conf(HOME_JV)
+                jv = arm.ik(tgt_pos=ac_pos, tgt_rotmat=ac_rot,
+                            seed_jnt_values=HOME_JV)
+            except Exception:
+                jv = None
+            if jv is None:
+                continue
+            scored.append((self._joint_margin(arm, jv), int(gid),
+                           np.asarray(jv, dtype=float), ac_pos, ac_rot))
+
+        if not scored:
+            return [], "no pick-pose IK under HOME seed"
+        # higher margin first (pre-filter ordering only)
+        scored.sort(key=lambda t: (-t[0], t[1]))
+
+        # ---- phase 2: continuous +Z depart IK gate on the top-margin grasps ---
+        survivors: List[int] = []
+        best_margin = scored[0][0]
+        checked = 0
+        for margin, gid, jv_pick, ac_pos, ac_rot in scored[:L2_DEPART_MOTION_K]:
+            checked += 1
+            prev = jv_pick
+            ok = True
+            for t in range(1, n_steps + 1):
+                pos_t = ac_pos + lift_dir * (dist * t / n_steps)
+                try:
+                    jv_t = arm.ik(tgt_pos=pos_t, tgt_rotmat=ac_rot,
+                                  seed_jnt_values=prev)
+                except Exception:
+                    jv_t = None
+                if jv_t is None:
+                    ok = False
+                    break
+                prev = np.asarray(jv_t, dtype=float)
+            if ok:
+                survivors.append(int(gid))
+                if len(survivors) >= L2_DEPART_KEEP:
+                    break
+
+        if not survivors:
+            return [], (f"no grasp admits +Z {dist:.3f}m pick-depart "
+                        f"(checked={checked}, best_margin={best_margin:.3f})")
+        return survivors, (f"ok survivors={len(survivors)}/{checked} "
+                           f"best_margin={best_margin:.3f}")
+
     def _endpoint_manip(self, arm, gc, sp, sr, gp, gr, obs) -> float:
         if check_pose_reachability is None:
             return 0.0
@@ -2315,6 +2440,7 @@ class WeightedInitialLayoutSearcher:
                 "upright_constraint": 0,
                 "staging_arm_keepout": 0,
                 "l2_pick_quick_check": 0,
+                "l2_pick_depart_motion": 0,
                 "home_clearance": 0,
                 "no_common_gids": 0,
                 "reason_exception": 0,
@@ -2524,6 +2650,20 @@ class WeightedInitialLayoutSearcher:
                     n = len(gids)
                     if n <= 0:
                         fail_counter["no_common_gids"] += 1
+                        continue
+
+                    # Continuous +Z pick-depart segment gate (runs FIRST, on the
+                    # L1 common grasps, identical to the beam oracle): reject
+                    # placements whose surviving common grasps cannot actually be
+                    # lifted along the prescribed L3 segment (endpoint IK !=
+                    # motion). Ordered before the quick check so the witness and
+                    # the beam oracle gate the same L1 gid set consistently.
+                    arm.goto_given_conf(HOME_JV)
+                    gids, depart_msg = self._l2_pick_depart_motion_gids(
+                        arm=arm, gc=gc, sp=sp, sr=sr, gids=list(gids))
+                    n = len(gids)
+                    if n <= 0:
+                        fail_counter["l2_pick_depart_motion"] += 1
                         continue
 
                     # 新增 L2 快速抓取运动检查：

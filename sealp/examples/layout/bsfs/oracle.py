@@ -144,23 +144,39 @@ class StepOracle:
             return None, "no_common_gids"
         sel_gids = list(best_gids)
 
+        arm = get_layout_arm(s.robot, best_arm, single_arm=s.single_arm_mode)
+
+        # ---- L1.5 continuous pick-depart motion gate (ALWAYS, correctness) ----
+        # Runs at every fidelity level (including the beam's default level 1) so
+        # the search itself never selects a placement whose only common grasps
+        # cannot be lifted along the prescribed +Z L3 segment. Endpoint IK
+        # feasibility does NOT imply this local motion is feasible; the helper
+        # pins HOME_JV per grasp for deterministic IK seeds.
+        try:
+            gids_dep, _ = s._l2_pick_depart_motion_gids(
+                arm=arm, gc=gc, sp=sp, sr=sr, gids=list(best_gids))
+        except Exception:
+            gids_dep = list(best_gids)
+        if not gids_dep:
+            return None, "l2_pick_depart_motion"        # motion-ish -> not cached
+        best_gc = len(gids_dep)
+        sel_gids = list(gids_dep)
+
         # ---- L2 quick pick motion --------------------------------
         if level >= 2:
-            arm = get_layout_arm(s.robot, best_arm, single_arm=s.single_arm_mode)
             planner = PickPlacePlanner(robot=arm)
             try:
                 gids2, _ = s._l2_pick_quick_check_gids(
-                    pid=pid, planner=planner, gc=gc, gids=list(best_gids),
+                    pid=pid, planner=planner, gc=gc, gids=list(sel_gids),
                     sp=sp, sr=sr, obs=obs)
             except Exception:
-                gids2 = best_gids
+                gids2 = sel_gids
             if not gids2:
                 return None, "l2_pick_quick_check"      # motion-ish -> not cached
             best_gc = len(gids2)
             sel_gids = list(gids2)
 
         # ---- metrics ---------------------------------------------
-        arm = get_layout_arm(s.robot, best_arm, single_arm=s.single_arm_mode)
         manip = float(s._endpoint_manip(arm, gc, sp, sr, gp, gr, planner_obs))
         clearance = self._clearance_proxy(pid, xy, active)
         # hard secondary gates (clearance + manip)
