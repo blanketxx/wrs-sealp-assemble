@@ -26,6 +26,7 @@ Output layout:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -47,13 +48,27 @@ CHAIR_PARTS_4LEG = "seat,leg_bl,leg_br,leg_fl,leg_fr"
 CHAIR_PARTS_REDUCED = "seat,leg_bl,leg_br"
 TOWER_PARTS = "base_plate,post_br,post_fr,post_bl,post_fl,middle_plate,top_cross"
 
-# full 4-leg chair, single fixed center (P1/P2: controlled search variable only)
+# P1/P2 headline (full 4-leg, single fixed center) -- kept for reference / P2.
 CHAIR_4LEG_SINGLE = [
     "--asmdef", ASM_CHAIR, "--grasp-dir", GRASP_CHAIR,
     "--part-order", CHAIR_PARTS_4LEG, "--goal-pos", "0.373,0.0,0.0",
     "--mode", "beam", "--center-search", "single",
     "--grid-spacing", "0.06", "--cand-per-part", "10", "--beam-width", "6",
     "--poses-per-xy", "1", "--yaw-step-deg", "20", "--witness-retries", "5",
+    "--workers", "4", "--parallel-level", "auto",
+]
+
+# P1 local tractable config: FULL 4-leg chair, single fixed center, but the
+# lighter grid/beam used by the local bsfs_repro_* runs (0.07 / cand=8 / beam=4 /
+# retries=3). Much faster than the 0.06/10/6/5 headline config while still
+# assembling all four legs; the backward-vs-forward search-order variable is
+# unchanged.
+CHAIR_P1_LOCAL = [
+    "--asmdef", ASM_CHAIR, "--grasp-dir", GRASP_CHAIR,
+    "--part-order", CHAIR_PARTS_4LEG, "--goal-pos", "0.373,0.0,0.0",
+    "--mode", "beam", "--center-search", "single",
+    "--grid-spacing", "0.07", "--cand-per-part", "8", "--beam-width", "4",
+    "--poses-per-xy", "1", "--yaw-step-deg", "20", "--witness-retries", "3",
     "--workers", "4", "--parallel-level", "auto",
 ]
 
@@ -115,7 +130,7 @@ def build_p1() -> List[Dict]:
     specs = []
     for seed in SEEDS_HEADLINE:
         for order in ("backward", "forward"):
-            specs.append(_spec("p1", order, "chair", seed, CHAIR_4LEG_SINGLE,
+            specs.append(_spec("p1", order, "chair", seed, CHAIR_P1_LOCAL,
                                order=order, state="sequential"))
     return specs
 
@@ -205,11 +220,9 @@ def _execute(specs: List[Dict], print_only: bool) -> None:
         print("#" * 72)
         env = dict(os.environ)
         env["PYTHONIOENCODING"] = "utf-8"
-        proc = subprocess.run(cmd, env=env, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace")
-        sys.stdout.write(proc.stdout or "")
-        sys.stderr.write(proc.stderr or "")
-        last_cost = _parse_cost(proc.stdout or "")
+        # Stream stdout/stderr live so long runs show [1/9]..[9/9] progress.
+        proc = subprocess.run(cmd, env=env)
+        last_cost = _parse_cost_from_log(spec)
 
 
 def _parse_cost(stdout: str) -> Optional[float]:
@@ -221,6 +234,21 @@ def _parse_cost(stdout: str) -> Optional[float]:
             except ValueError:
                 return None
     return None
+
+
+def _parse_cost_from_log(spec: Dict) -> Optional[float]:
+    """Read RUN_ONE_COST from the JSON written by run_one (P3 beam ref chain)."""
+    out_dir = os.path.join(OUT_ROOT, spec["priority"])
+    run_id = f"{spec['priority']}_{spec['variant']}_{spec['task']}_seed{spec['seed']}"
+    path = os.path.join(out_dir, f"{run_id}.json")
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data.get("objective_cost")
+    except Exception:
+        return None
 
 
 def _quote(s: str) -> str:
