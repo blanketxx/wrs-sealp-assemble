@@ -1,0 +1,98 @@
+{
+  "method": "BSFS-exact",
+  "asmdef": "sealp/assembly_sequence/_demo_output/yuanchair.asmdef",
+  "num_parts": 3,
+  "stats": {
+    "certifications": 211,
+    "max_depth_certified": 2,
+    "full_evaluate_layout": 1,
+    "sites_tried": 1,
+    "sites_feasible": 1,
+    "hall_pruned": 0
+  },
+  "assembly_center": [
+    0.373,
+    0.0,
+    0.0
+  ],
+  "layout_score": 0.2690390236025715,
+  "total_cost": 1.192331188373653,
+  "l2_pass": true,
+  "l3_pass": false,
+  "preassembled_part": "seat",
+  "picked_parts": [
+    "leg_fr",
+    "leg_bl"
+  ],
+  "best_layout": {
+    "leg_fr": {
+      "init_pos": [
+        0.2335,
+        -0.09,
+        0.029500000402331347
+      ],
+      "init_rotmat": [
+        0.7071067811865474,
+        0.0,
+        0.7071067811865474,
+        0.7071067811865475,
+        0.0,
+        -0.7071067811865475,
+        0.0,
+        0.9999999999999999,
+        0.0
+      ],
+      "pose_tag": "fs_stable_lifted",
+      "arm_choice": "lft",
+      "grasp_count": 1,
+      "manipulability": 0.010783811589920303,
+      "dist_to_goal": 0.07294175764021794
+    },
+    "leg_bl": {
+      "init_pos": [
+        0.2335,
+        0.09000000000000002,
+        0.029500000402331354
+      ],
+      "init_rotmat": [
+        1.0000000000000002,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0000000000000002,
+        0.0,
+        -1.0000000000000002,
+        0.0
+      ],
+      "pose_tag": "rot90_lifted",
+      "arm_choice": "lft",
+      "grasp_count": 23,
+      "manipulability": 0.02009325754046029,
+      "dist_to_goal": 0.21066679854130857
+    },
+    "seat": {
+      "init_pos": [
+        0.373,
+        0.0,
+        0.0
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "preassembled_at_assembly_region",
+      "arm_choice": "preassembled",
+      "grasp_count": 20,
+      "manipulability": 0.0,
+      "dist_to_goal": 0.0
+    }
+  }
+}

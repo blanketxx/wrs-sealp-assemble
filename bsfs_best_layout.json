@@ -1,0 +1,142 @@
+{
+  "method": "BSFS",
+  "asmdef": "sealp/assembly_sequence/_demo_output/yuanchair.asmdef",
+  "assembly_center": [
+    0.373,
+    0.0,
+    0.0
+  ],
+  "num_parts": 5,
+  "ga_parts": [
+    "leg_fr",
+    "leg_fl",
+    "leg_br",
+    "leg_bl"
+  ],
+  "layout_score": 0.6557820495045816,
+  "l2_pass": true,
+  "stats": {
+    "certifications": 123,
+    "max_depth_certified": 4,
+    "full_evaluate_layout": 4,
+    "sites_tried": 1,
+    "sites_feasible": 1
+  },
+  "best_layout": {
+    "leg_fr": {
+      "init_pos": [
+        0.4339999995976686,
+        0.20049999959766862,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "identity",
+      "arm_choice": "lft",
+      "grasp_count": 61,
+      "manipulability": 0.01570577000921955,
+      "dist_to_goal": 0.30071789051688946
+    },
+    "leg_fl": {
+      "init_pos": [
+        0.4339999995976686,
+        -0.20049999959766862,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "identity",
+      "arm_choice": "lft",
+      "grasp_count": 64,
+      "manipulability": 0.015705770167757302,
+      "dist_to_goal": 0.30071789051688946
+    },
+    "leg_br": {
+      "init_pos": [
+        0.03300000040233138,
+        -0.20049999959766862,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "identity",
+      "arm_choice": "lft",
+      "grasp_count": 41,
+      "manipulability": 0.02009325104215379,
+      "dist_to_goal": 0.4303838398047489
+    },
+    "leg_bl": {
+      "init_pos": [
+        0.03300000040233138,
+        0.20049999959766862,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "identity",
+      "arm_choice": "lft",
+      "grasp_count": 52,
+      "manipulability": 0.02009325754046029,
+      "dist_to_goal": 0.4303838398047489
+    },
+    "seat": {
+      "init_pos": [
+        0.373,
+        0.0,
+        0.0
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "preassembled_at_assembly_region",
+      "arm_choice": "preassembled",
+      "grasp_count": 20,
+      "manipulability": 0.0,
+      "dist_to_goal": 0.0
+    }
+  }
+}

@@ -1,0 +1,146 @@
+{
+  "method": "BSFS-beam",
+  "asmdef": "sealp/assembly_sequence/_demo_output/yuanchair.asmdef",
+  "num_parts": 5,
+  "stats": {
+    "certifications": 141,
+    "max_depth_certified": 4,
+    "full_evaluate_layout": 6,
+    "sites_tried": 1,
+    "sites_feasible": 1,
+    "hall_pruned": 0
+  },
+  "assembly_center": [
+    0.373,
+    0.0,
+    0.0
+  ],
+  "layout_score": 0.5995053162397254,
+  "total_cost": 2.7320843830828547,
+  "l2_pass": true,
+  "l3_pass": false,
+  "preassembled_part": "seat",
+  "picked_parts": [
+    "leg_fr",
+    "leg_fl",
+    "leg_br",
+    "leg_bl"
+  ],
+  "best_layout": {
+    "leg_fr": {
+      "init_pos": [
+        0.23349999999999999,
+        -0.20049999959766862,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "identity",
+      "arm_choice": "lft",
+      "grasp_count": 149,
+      "manipulability": 0.010817788645851091,
+      "dist_to_goal": 0.1481907550928583
+    },
+    "leg_fl": {
+      "init_pos": [
+        0.23349999999999999,
+        0.050124999899417155,
+        0.029500000402331354
+      ],
+      "init_rotmat": [
+        1.0000000000000002,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0000000000000002,
+        0.0,
+        -1.0000000000000002,
+        0.0
+      ],
+      "pose_tag": "rot90_lifted",
+      "arm_choice": "lft",
+      "grasp_count": 53,
+      "manipulability": 0.010784022278019181,
+      "dist_to_goal": 0.07290758284734493
+    },
+    "leg_br": {
+      "init_pos": [
+        0.4339999995976686,
+        -0.20049999959766862,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "identity",
+      "arm_choice": "lft",
+      "grasp_count": 35,
+      "manipulability": 0.020360384549824608,
+      "dist_to_goal": 0.13119165332532964
+    },
+    "leg_bl": {
+      "init_pos": [
+        0.4339999995976686,
+        0.20049999959766862,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "identity",
+      "arm_choice": "lft",
+      "grasp_count": 76,
+      "manipulability": 0.02036040003793566,
+      "dist_to_goal": 0.13119165332532964
+    },
+    "seat": {
+      "init_pos": [
+        0.373,
+        0.0,
+        0.0
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "preassembled_at_assembly_region",
+      "arm_choice": "preassembled",
+      "grasp_count": 20,
+      "manipulability": 0.0,
+      "dist_to_goal": 0.0
+    }
+  }
+}
