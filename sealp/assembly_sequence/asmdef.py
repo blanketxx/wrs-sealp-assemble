@@ -118,6 +118,13 @@ class StepDef:
         Position relative to parent ``[x, y, z]``.
     rel_rotmat : np.ndarray
         Orientation relative to parent (3×3).
+    insertion_axis_local : np.ndarray or None
+        Optional EXPLICIT mating/insertion axis, expressed in the part's LOCAL
+        frame at goal. It is the direction along which the part translates to
+        SEAT into its parent (i.e. the place-approach direction). The world
+        approach direction is ``normalize(R_goal @ insertion_axis_local)`` and
+        the place-depart direction is its negation. If ``None`` the motion layer
+        infers the axis (child local +Z, then legacy world -Z fallback).
     deps : list of int
         Step IDs that must complete before this step.
     notes : str
@@ -130,6 +137,7 @@ class StepDef:
     parent_id: str = "fixture"
     rel_pos: np.ndarray = field(default_factory=lambda: np.zeros(3))
     rel_rotmat: np.ndarray = field(default_factory=lambda: np.eye(3))
+    insertion_axis_local: Optional[np.ndarray] = None
     deps: List[int] = field(default_factory=list)
     notes: str = ""
     metadata: dict = field(default_factory=dict)
@@ -144,6 +152,9 @@ class StepDef:
                            for row in self.rel_rotmat],
             "deps": list(self.deps),
         }
+        if self.insertion_axis_local is not None:
+            d["insertion_axis_local"] = [float(v)
+                                         for v in self.insertion_axis_local]
         if self.notes:
             d["notes"] = self.notes
         if self.metadata:
@@ -152,6 +163,7 @@ class StepDef:
 
     @classmethod
     def from_dict(cls, d: dict) -> "StepDef":
+        _iax = d.get("insertion_axis_local", None)
         return cls(
             step_id=int(d["step"]),
             part_id=d["part"],
@@ -159,6 +171,8 @@ class StepDef:
             rel_pos=np.asarray(d.get("rel_pos", [0, 0, 0]), dtype=float),
             rel_rotmat=np.asarray(
                 d.get("rel_rotmat", np.eye(3).tolist()), dtype=float),
+            insertion_axis_local=(None if _iax is None
+                                  else np.asarray(_iax, dtype=float)),
             deps=list(d.get("deps", [])),
             notes=d.get("notes", ""),
             metadata=d.get("metadata", {}),

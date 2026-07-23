@@ -671,18 +671,24 @@ def _patch_rrt_for_l3() -> None:
     _patched_plan._tower_l3_patched = True
     RRTConnect.plan = _patched_plan
 
-def _transport_kwargs():
+def _transport_kwargs(place_approach_dir=None, place_depart_dir=None):
     """通用 tower pick-place 方向。
 
-    这里保持从上方抓取、向上撤离、从上往下放置。
-    如果后续某类零件需要专属方向，可以在这里按 part_id 扩展。
+    pick_depart 固定为 +Z 抬升(安全撤离)。
+    place_approach / place_depart 若给定了 override(见 ``_assembly_mating_dirs``,
+    L3/RRT 阶段按装配定义动态计算的插入轴), 则用 override; 否则回退到默认
+    "从上往下放置(-Z)、向上撤离(+Z)"。
     """
+    pa = (PLACE_APPROACH_DIR if place_approach_dir is None
+          else np.asarray(place_approach_dir, dtype=float))
+    pd = (PLACE_DEPART_DIR if place_depart_dir is None
+          else np.asarray(place_depart_dir, dtype=float))
     return dict(
         pick_depart_direction=PICK_DEPART_DIR,
         pick_depart_distance=PICK_DEPART_DIST,
-        place_approach_direction_list=[PLACE_APPROACH_DIR],
+        place_approach_direction_list=[pa],
         place_approach_distance_list=[PLACE_APPROACH_DIST],
-        place_depart_direction_list=[PLACE_DEPART_DIR],
+        place_depart_direction_list=[pd],
         place_depart_distance_list=[PLACE_DEPART_DIST],
     )
 
@@ -2367,6 +2373,18 @@ class WeightedInitialLayoutSearcher:
                     planner = PickPlacePlanner(robot=arm)
 
                     try:
+                        # Deterministic IK warm-start: the grasp reasoner's
+                        # robot.ik() has no explicit seed and therefore warm-starts
+                        # from the arm's CURRENT joint config. That residual config
+                        # depends on execution history (which worker ran which task),
+                        # making marginal grasp feasibility/manipulability -- and thus
+                        # the witness verdict -- process-order dependent. Pinning the
+                        # arm to the canonical HOME_JV before every witness IK call
+                        # makes the warm-start seed fixed, so workers=1 and workers=N
+                        # evaluate the identical logical task deterministically. This
+                        # only fixes the IK seed; the feasibility DEFINITION (collision
+                        # / reachability / common-grasp checks) is unchanged.
+                        arm.goto_given_conf(HOME_JV)
                         gids = planner.reason_common_gids(
                             grasp_collection=gc,
                             goal_pose_list=[(sp, sr), (gp, gr)],
@@ -2503,6 +2521,10 @@ class WeightedInitialLayoutSearcher:
                     # 新增 L2 快速抓取运动检查：
                     # 对 middle_plate 等指定大件，进一步检查 pre-pick / pick / post-pick
                     # 三个位姿是否在当前动态障碍下仍有共同 grasp。
+                    # (deterministic IK warm-start: pin HOME_JV before the witness
+                    #  IK so the unseeded reason_common_gids inside uses a fixed
+                    #  seed -- see the note at the main reason_common_gids call.)
+                    arm.goto_given_conf(HOME_JV)
                     gids, quick_msg = self._l2_pick_quick_check_gids(
                         pid=pid,
                         planner=planner,
@@ -2519,6 +2541,8 @@ class WeightedInitialLayoutSearcher:
 
                     dist = float(np.linalg.norm(np.asarray(sp) - np.asarray(gp)))
                     rot_ang = _rot_angle(sr, gr)
+                    # deterministic IK warm-start for the manipulability estimate
+                    arm.goto_given_conf(HOME_JV)
                     manip = self._endpoint_manip(arm, gc, sp, sr, gp, gr, planner_obs)
 
                     # 单零件临时得分，用于在该零件多个候选姿态中选一个最好姿态。
@@ -2836,6 +2860,73 @@ class WeightedInitialLayoutSearcher:
         finally:
             _reset_robot_for_l3(self.robot, single_arm=self.single_arm_mode)
 
+    def _assembly_mating_dirs(self, pid: str, gr: np.ndarray):
+        """L3/RRT 阶段该零件的插入(place-approach)/撤离(place-depart)方向。
+
+        统一的符号约定
+        --------------
+            approach = d_insert  = 零件被送入父件时末端平移的世界方向;
+            depart   = -d_insert = 装配完成后沿反方向退出。
+
+        按优先级(高->低)确定 d_insert:
+
+          1) 显式 ``insertion_axis_local`` (asmdef 中该步给定的局部插接轴):
+                 d_insert = normalize(gr @ insertion_axis_local)
+             约定: ``insertion_axis_local`` 是"零件在其目标局部坐标系下被插入
+             的平移方向"(即 place-approach 的局部表示)。
+          2) 推断的子件局部 +Z 轴: axis = gr[:, 2]; 由 ``rel_pos`` 在该轴上的
+             投影符号确定零件坐落在父件哪一侧, 从该侧沿 ``-axis`` 插入。
+             投影≈0(偏移垂直于轴)时回退为"从上方(-世界Z)接近"。
+          3) 调用方回退到固定 world -Z/+Z (返回 None)。
+
+        注意: 主插接轴不从 staging->goal 运输方向推断。
+
+        :return: (approach_dir, depart_dir) 单位向量; 无法确定时返回 (None, None)。
+        """
+        step = None
+        for s in getattr(self.asm, "steps", []):
+            if getattr(s, "part_id", None) == pid:
+                step = s
+                break
+        if step is None:
+            return None, None
+        try:
+            gr = np.asarray(gr, dtype=float).reshape(3, 3)
+
+            # ---- priority 1: explicit per-relation insertion_axis_local ----
+            d_local = getattr(step, "insertion_axis_local", None)
+            if d_local is not None:
+                d_local = np.asarray(d_local, dtype=float).reshape(3)
+                if float(np.linalg.norm(d_local)) >= 1e-9:
+                    d_insert = gr @ d_local
+                    n = float(np.linalg.norm(d_insert))
+                    if n >= 1e-9:
+                        d_insert = d_insert / n
+                        return d_insert, -d_insert
+
+            # ---- priority 2: inferred child local +Z axis ----
+            axis = gr[:, 2].astype(float)
+            n = float(np.linalg.norm(axis))
+            if n < 1e-9:
+                return None, None
+            axis = axis / n
+            # 父件世界姿态: parent_rot = gr @ rel_rotmat^T
+            rel_rot = np.asarray(step.rel_rotmat, dtype=float).reshape(3, 3)
+            rel_pos = np.asarray(step.rel_pos, dtype=float).reshape(3)
+            parent_rot = gr @ rel_rot.T
+            rel_pos_world = parent_rot @ rel_pos
+            d = float(np.dot(rel_pos_world, axis))
+            if abs(d) < 1e-6:
+                # 偏移垂直于装配轴: 默认从上方接近(approach 的世界 Z 分量 <= 0)
+                approach = axis if axis[2] < 0 else -axis
+            else:
+                sgn = 1.0 if d > 0 else -1.0
+                approach = -sgn * axis
+            return approach, -approach
+        except Exception:
+            # ---- priority 3: caller falls back to fixed world -Z/+Z ----
+            return None, None
+
     def _l3_plan_part(self, layout, step_idx, pid, arm_tag, sp, sr, gp, gr, gc, obs,
                       lft_transport, rgt_transport, verbose=True, placement_obs=None) -> bool:
         """L3 单个零件的全流程运动验证钩子(默认: 单臂 TransportPrimitive)。
@@ -2857,6 +2948,15 @@ class WeightedInitialLayoutSearcher:
         obj_cm._sealp_part_id = pid
         obj_cm._sealp_role = "l3_moving_object"
 
+        # L3/RRT 阶段: 按装配定义动态计算插入/撤离方向(而非固定 -Z/+Z)。
+        place_approach_dir, place_depart_dir = self._assembly_mating_dirs(pid, gr)
+        if verbose and place_approach_dir is not None:
+            print(f"  [L3] {pid} dynamic mating dir: "
+                  f"approach={np.round(place_approach_dir, 3).tolist()} "
+                  f"depart={np.round(place_depart_dir, 3).tolist()}")
+        tk = _transport_kwargs(place_approach_dir=place_approach_dir,
+                               place_depart_dir=place_depart_dir)
+
         try:
             try:
                 res = transport.plan(
@@ -2868,7 +2968,7 @@ class WeightedInitialLayoutSearcher:
                     approach_distance=APPROACH_DIST,
                     depart_distance=PICK_DEPART_DIST,
                     linear_granularity=LINEAR_GRANULARITY,
-                    **_transport_kwargs(),
+                    **tk,
                 )
             except TypeError:
                 # 兼容旧版 TransportPrimitive.plan(无 grasp_obstacle_list)
@@ -2880,7 +2980,7 @@ class WeightedInitialLayoutSearcher:
                     approach_distance=APPROACH_DIST,
                     depart_distance=PICK_DEPART_DIST,
                     linear_granularity=LINEAR_GRANULARITY,
-                    **_transport_kwargs(),
+                    **tk,
                 )
         except Exception as e:
             layout.l3_fail_reason = (

@@ -71,6 +71,18 @@ DET_FAIL_KEYS = frozenset({
 # Fail reasons that MAY be caused by stochastic IK/grasp search (retry-able).
 STO_FAIL_KEYS = frozenset({"no_common_gids", "l2_pick_quick_check", "reason_exception"})
 
+# Yaw refinement keeps layout_score as the criterion, but two headings whose
+# scores are within this band are treated as a TIE and resolved deterministically
+# by the smallest yaw angle (then stable candidate id). The band is sized to
+# exceed the observed WRS IK warm-start score noise: the witness grasp-reasoner
+# (wrs/grasping/reasoner.py) calls robot.ik() without a fixed seed, so it
+# warm-starts from the arm's current joint config, which depends on process
+# history and therefore differs between workers=1 and workers=4 (per-heading
+# score jitter ~0.04-0.06). A 0.06 band absorbs that jitter so the good heading
+# cluster resolves to the same smallest-angle heading regardless of worker count,
+# while remaining far below the >0.15 gap to clearly-worse headings.
+YAW_TIE_TOL = 0.06
+
 
 # ------------------------------------------------------------------
 # args
@@ -500,8 +512,14 @@ def _extract_layout(searcher, layout, preassembled_pid, center, score, cost,
 
 
 def _better(a: Optional[Dict], b: Optional[Dict]) -> bool:
-    """Deterministic global-best test: minimise cost, then maximise score, then
-    tie-break by fingerprint so worker/scheduling order is irrelevant."""
+    """Fully deterministic global-best test: minimise objective cost, then break
+    ties by the DETERMINISTIC layout fingerprint.
+
+    ``layout_score`` is intentionally NOT used to choose between equal-cost
+    layouts: it is derived from WRS IK (warm-start dependent, so not bit-stable
+    across worker counts) and is retained only as a reported diagnostic. Ordering
+    by cost -> fingerprint makes the selection independent of process scheduling
+    (workers=1 and workers=4 pick the identical layout)."""
     if a is None:
         return False
     if b is None:
@@ -509,9 +527,6 @@ def _better(a: Optional[Dict], b: Optional[Dict]) -> bool:
     ca, cb = a.get("total_cost"), b.get("total_cost")
     if ca is not None and cb is not None and abs(ca - cb) > 1e-9:
         return ca < cb
-    sa, sb = a.get("layout_score", 0.0), b.get("layout_score", 0.0)
-    if abs(sa - sb) > 1e-9:
-        return sa > sb
     return str(a.get("_fingerprint", "")) < str(b.get("_fingerprint", ""))
 
 
@@ -580,7 +595,6 @@ def _yaw_refine(searcher, args, assign, center, preassembled_pid, stats,
             searcher, trial, preassembled_pid, center, args, part_order, stats)
         return float(getattr(cand, "layout_score", 0.0)) if status == "SUCCESS" else -1.0
 
-    best_score = _score_of(cur)
     for _ in range(2):
         improved = False
         for pid in list(cur.keys()):
@@ -597,15 +611,20 @@ def _yaw_refine(searcher, args, assign, center, preassembled_pid, stats,
                                            for t in trials])
             else:
                 scores = [_score_of(t) for t in trials]
-            # deterministic pick: highest score; degs ascend so the smallest
-            # degree achieving the best score wins (strict-improvement update).
-            local_name, local_score = cur[pid]["rot_name"], best_score
-            for (d, name), sc in zip(names, scores):
-                if float(sc) > local_score + 1e-9:
-                    local_score, local_name = float(sc), name
-            if local_name != cur[pid]["rot_name"]:
-                cur[pid]["rot_name"] = local_name
-                best_score = local_score
+            # criterion = MAXIMISE layout_score; but resolve exact/near ties
+            # DETERMINISTICALLY by smallest yaw angle, then stable candidate id
+            # (name). A heading whose score is within YAW_TIE_TOL of the best is
+            # considered tied, so IK warm-start score noise cannot flip the pick.
+            feas = [(int(d), str(name), float(sc))
+                    for (d, name), sc in zip(names, scores) if float(sc) > -1.0]
+            if not feas:
+                continue
+            best_sc = max(s for _, _, s in feas)
+            band = sorted(((d, name) for (d, name, s) in feas
+                           if s >= best_sc - YAW_TIE_TOL), key=lambda t: (t[0], t[1]))
+            chosen = band[0][1]
+            if chosen != cur[pid]["rot_name"]:
+                cur[pid]["rot_name"] = chosen
                 improved = True
         if not improved:
             break
