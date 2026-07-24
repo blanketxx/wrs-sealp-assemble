@@ -94,8 +94,6 @@ import find_optimal_initial_layout_tower_strict_pycharm_fast as fast
 import find_optimal_initial_layout_tower_nsga2_v1 as nsga2
 import find_optimal_initial_layout_tower_global as gmod
 
-from layout_learning.generator_dataset import sample_schema_extensions
-
 LayoutCandidate = fol.LayoutCandidate
 
 # 数据生成配置
@@ -476,6 +474,9 @@ def sample_from_candidate(searcher, cand: LayoutCandidate, seed: int,
         "fail_part": getattr(cand, "fail_part", None),
         "fail_detail": dict(getattr(cand, "fail_detail", {}) or {}),
     }
+    # Lazy: layout_learning.generator_* pulls torch; BSFS/experiments only need
+    # ``_pose_candidates_for_part`` from this module and must not require torch.
+    from layout_learning.generator_dataset import sample_schema_extensions
     base.update(sample_schema_extensions(base))
     return base
 

@@ -1,0 +1,235 @@
+{
+  "method": "BSFS-beam",
+  "asmdef": "sealp/assembly_sequence/_demo_output/yuanchair.asmdef",
+  "num_parts": 3,
+  "witness_status": "L2_PASS",
+  "objective_cost": 1.5458145344559222,
+  "layout_fingerprint": "C0.3730,0.0000|leg_bl:0.4135,0.1800:identity|leg_br:0.4135,-0.1800:identity|beam|0.09|12|1|6|0.1|0.005|0.001|False|False|seat,leg_bl,leg_br",
+  "execution": {
+    "workers": 16,
+    "parallel_level": "candidates",
+    "center_search_mode": "single",
+    "seed": 0,
+    "worker_tasks_submitted": 736,
+    "worker_tasks_completed": 736
+  },
+  "center_search": {
+    "mode": "single",
+    "stage2_skipped": true,
+    "stage3_skipped": true,
+    "stage4_skipped": true,
+    "coarse_centers_total": 0,
+    "coarse_centers_hard_rejected": 0,
+    "coarse_centers_survived": 0,
+    "coarse_centers_retained": 0,
+    "refined_centers_generated": 0,
+    "refined_centers_unique": 0,
+    "full_bsfs_centers_evaluated": 1
+  },
+  "timing": {
+    "time_load": 2.52,
+    "time_center_generation": 0.0,
+    "time_center_screening": 0.0,
+    "time_center_refinement": 0.0,
+    "time_bsfs": 7662.82,
+    "time_to_first_feasible": 7662.82,
+    "time_yaw_refinement": 0.0,
+    "time_final_witness": 0.0,
+    "total_runtime": 8395.3
+  },
+  "bsfs_stats": {
+    "oracle_certifications": 736,
+    "node_expansions": 7,
+    "hard_prunes": 512,
+    "hall_prunes": 0,
+    "propagation_prunes": 0,
+    "beam_width": 6,
+    "max_depth_certified": 2
+  },
+  "witness": {
+    "witness_retries_configured": 5,
+    "full_witness_calls": 6,
+    "witness_attempts_total": 6,
+    "cached_witness_reuses": 1,
+    "configured_retries": 5,
+    "attempts": [
+      {
+        "retry": 0,
+        "seed": 935278213,
+        "result": "SUCCESS"
+      }
+    ],
+    "successful_retry_index": 0,
+    "reused_from_cache": true,
+    "fingerprint": "C0.3730,0.0000|leg_bl:0.4135,0.1800:identity|leg_br:0.4135,-0.1800:identity|beam|0.09|12|1|6|0.1|0.005|0.001|False|False|seat,leg_bl,leg_br",
+    "seeds": [
+      935278213
+    ]
+  },
+  "grasp_robustness": {
+    "per_step_common_grasp_count": {
+      "leg_br": 4,
+      "leg_bl": 4
+    },
+    "min_common_grasp_count": 4
+  },
+  "per_step_certification": {
+    "leg_br": {
+      "pid": "leg_br",
+      "xy": [
+        0.4135,
+        -0.18
+      ],
+      "rot_name": "identity",
+      "pose_tag": "identity",
+      "arm": "lft",
+      "gids": [
+        194,
+        4,
+        356,
+        440
+      ],
+      "footprint": [
+        0.039000000804662704,
+        0.039000000804662704
+      ],
+      "common_grasp_count": 4,
+      "manipulability": 0.019846903455840333,
+      "clearance": 0.1845,
+      "dist_to_goal": 0.11388700540447974,
+      "cost": 0.7729072672279611,
+      "cost_lb": 0.11432519407374736,
+      "certified": true,
+      "yaw_deg": 0.0
+    },
+    "leg_bl": {
+      "pid": "leg_bl",
+      "xy": [
+        0.4135,
+        0.18
+      ],
+      "rot_name": "identity",
+      "pose_tag": "identity",
+      "arm": "lft",
+      "gids": [
+        194,
+        4,
+        170,
+        250
+      ],
+      "footprint": [
+        0.039000000804662704,
+        0.039000000804662704
+      ],
+      "common_grasp_count": 4,
+      "manipulability": 0.019846903439108395,
+      "clearance": 0.1845,
+      "dist_to_goal": 0.11388700540447974,
+      "cost": 0.7729072672279611,
+      "cost_lb": 0.11432519407374736,
+      "certified": true,
+      "yaw_deg": 0.0
+    }
+  },
+  "assembly_center": [
+    0.373,
+    0.0,
+    0.0
+  ],
+  "layout_score": 0.4764842788888604,
+  "total_cost": 1.5458145344559222,
+  "l2_pass": true,
+  "l3_pass": false,
+  "preassembled_part": "seat",
+  "picked_parts": [
+    "leg_br",
+    "leg_bl"
+  ],
+  "best_layout": {
+    "leg_br": {
+      "init_pos": [
+        0.4135,
+        -0.18,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "identity",
+      "arm_choice": "lft",
+      "grasp_count": 4,
+      "manipulability": 0.019846903455840333,
+      "dist_to_goal": 0.11432519407374736,
+      "rot_name": "identity",
+      "yaw_deg": 0.0,
+      "gids": [
+        194,
+        4,
+        356,
+        440
+      ]
+    },
+    "leg_bl": {
+      "init_pos": [
+        0.4135,
+        0.18,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "identity",
+      "arm_choice": "lft",
+      "grasp_count": 4,
+      "manipulability": 0.019846903439108395,
+      "dist_to_goal": 0.11432519407374736,
+      "rot_name": "identity",
+      "yaw_deg": 0.0,
+      "gids": [
+        194,
+        4,
+        170,
+        250
+      ]
+    },
+    "seat": {
+      "init_pos": [
+        0.373,
+        0.0,
+        0.0
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "preassembled_at_assembly_region",
+      "arm_choice": "preassembled",
+      "grasp_count": 20,
+      "manipulability": 0.0,
+      "dist_to_goal": 0.0
+    }
+  }
+}

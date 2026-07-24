@@ -2,7 +2,7 @@
 
 Runs each experiment configuration STRICTLY SEQUENTIALLY, one isolated
 subprocess per run (``run_one``), never two WRS processes at once. Every Beam run
-uses workers=4; Exact A* is serial. Each run writes its own JSON and appends a
+uses workers=16; Exact A* is serial. Each run writes its own JSON and appends a
 row to the single summary CSV; nothing is overwritten; failed runs are recorded.
 
 This driver DOES NOT run smoke / reproducibility / validation tests. It only
@@ -57,7 +57,7 @@ _LIGHT_SINGLE = [
     "--mode", "beam", "--center-search", "single", "--goal-pos", "0.373,0.0,0.0",
     "--grid-spacing", "0.07", "--cand-per-part", "8", "--beam-width", "4",
     "--poses-per-xy", "1", "--yaw-step-deg", "20", "--witness-retries", "3",
-    "--workers", "4", "--parallel-level", "auto",
+    "--workers", "16", "--parallel-level", "auto",
 ]
 
 # P1/P2 reduced statistical instance: seat + 3 picked legs, single fixed center.
@@ -76,17 +76,17 @@ CHAIR_REDUCED_DISCRETE = [
     "--center-search", "single", "--discrete-domain",
     "--grid-spacing", "0.09", "--exact-cell-cap", "0", "--max-nodes", "500000",
     "--beam-width", "6", "--poses-per-xy", "1", "--yaw-step-deg", "0",
-    "--witness-retries", "5", "--workers", "4", "--parallel-level", "auto",
+    "--witness-retries", "5", "--workers", "16", "--parallel-level", "auto",
 ]
 
-# cross-assembly: frozen full pipeline (backward beam, coarse-to-fine, workers=4)
+# cross-assembly: frozen full pipeline (backward beam, coarse-to-fine, workers=16)
 _COARSE_TO_FINE = [
     "--mode", "beam", "--center-search", "coarse-to-fine",
     "--coarse-grid-n", "4", "--coarse-top-k", "4",
     "--refine-grid-n", "3", "--refine-spacing-factor", "0.5",
     "--grid-spacing", "0.06", "--cand-per-part", "10", "--beam-width", "6",
     "--poses-per-xy", "1", "--yaw-step-deg", "20", "--witness-retries", "5",
-    "--workers", "4", "--parallel-level", "auto",
+    "--workers", "16", "--parallel-level", "auto",
 ]
 CHAIR_CROSS = ["--asmdef", ASM_CHAIR, "--grasp-dir", GRASP_CHAIR,
                "--part-order", CHAIR_PARTS_4LEG, "--goal-pos", "0.373,0.0,0.0"] + _COARSE_TO_FINE
