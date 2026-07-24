@@ -118,11 +118,23 @@ def _parse_l3_fail_step(reason: str) -> str:
     return m.group(1) if m else ""
 
 
-def _staging_aware_l3(passthrough: List[str], out_json: str,
-                      seed: int) -> Dict[str, str]:
+def _swap_grasp_dir(passthrough: List[str], grasp_dir: str) -> List[str]:
+    """Return a copy of passthrough with --grasp-dir replaced (for full-grasp L3)."""
+    out = list(passthrough)
+    if "--grasp-dir" in out:
+        out[out.index("--grasp-dir") + 1] = grasp_dir
+    else:
+        out += ["--grasp-dir", grasp_dir]
+    return out
+
+
+def _staging_aware_l3(passthrough: List[str], out_json: str, seed: int,
+                      l3_grasp_dir: str = "") -> Dict[str, str]:
     """Replay the selected layout (no search) and return the staging_aware L3
     diagnostics: {verdict: PASS/FAIL/NA, fail_step, fail_reason}. Reuses the
-    frozen witness + validator; no algorithmic change."""
+    frozen witness + validator; no algorithmic change. If ``l3_grasp_dir`` is
+    set, the layout (found on the lean grasp set) is re-verified against the FULL
+    grasp set for soundness."""
     out = {"verdict": "NA", "fail_step": "", "fail_reason": ""}
     try:
         import numpy as np
@@ -132,7 +144,8 @@ def _staging_aware_l3(passthrough: List[str], out_json: str,
         best_layout = result.get("best_layout", {})
         preassembled = result.get("preassembled_part")
         center = np.asarray(result["assembly_center"], dtype=float)
-        args = run.parse_args(list(passthrough) + ["--seed", str(seed)])
+        pt = _swap_grasp_dir(passthrough, l3_grasp_dir) if l3_grasp_dir else list(passthrough)
+        args = run.parse_args(pt + ["--seed", str(seed)])
         searcher = run._build_searcher(args)
         assign = {}
         for pid in searcher.part_order:
@@ -231,6 +244,10 @@ def main(argv=None) -> int:
     ap.add_argument("--center-source", default="",
                     help="human-readable provenance of the (predetermined) assembly "
                          "center; recorded verbatim in the CSV for auditability.")
+    ap.add_argument("--l3-grasp-dir", default="",
+                    help="if set, the staging_aware L3 recheck re-verifies the "
+                         "layout against this (FULL) grasp dir for soundness, even "
+                         "though search used a lean grasp set.")
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--csv", required=True)
     ap.add_argument("run_args", nargs=argparse.REMAINDER,
@@ -298,8 +315,10 @@ def main(argv=None) -> int:
 
     # optional staging_aware L3 diagnostics on the final selected layout.
     if a.l3_check == "staging_aware" and success:
-        print("[run_one] running staging_aware L3 check on selected layout ...")
-        l3 = _staging_aware_l3(passthrough, out_json, a.seed)
+        gd = "FULL" if a.l3_grasp_dir else "search"
+        print(f"[run_one] running staging_aware L3 check on selected layout "
+              f"(grasps={gd}) ...")
+        l3 = _staging_aware_l3(passthrough, out_json, a.seed, a.l3_grasp_dir)
         row["l3_staging_aware"] = l3["verdict"]
         row["l3_fail_step"] = l3["fail_step"]
         row["l3_fail_reason"] = l3["fail_reason"]
