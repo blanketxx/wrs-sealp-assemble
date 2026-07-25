@@ -37,6 +37,7 @@ import importlib.util
 import json
 import math
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -2048,6 +2049,12 @@ class WeightedInitialLayoutSearcher:
             - top_cross 插入 middle_plate 顶面方孔 -> 规划 top_cross 时排除 middle_plate;
             - middle_plate 承托在四根 post 顶端    -> 规划 middle_plate 时排除四根 post。
         另外每个零件 asmdef 里的 direct parent 也会在 _contact_exclusion_set 里自动排除。
+
+        上面两条是按 tower 的零件名硬编码的, 换一个装配体就不会触发 (例如
+        stack_cube 的承托板叫 mid_plate 而不是 middle_plate)。所以还会读取
+        asmdef 同目录下的 `<name>_contacts.json` 侧车文件: 那里按几何算出了
+        每一步除 parent 之外真正接触到的已装件。没有侧车文件时行为与之前逐字
+        节相同, 因此 chair/tower 已有结果保持可复现。
         """
         cached = getattr(self, "_contact_excl_map_cache", None)
         if cached is not None:
@@ -2059,8 +2066,27 @@ class WeightedInitialLayoutSearcher:
         post_ids = [p for p in ("post_bl", "post_fl", "post_br", "post_fr") if p in part_ids]
         if "middle_plate" in part_ids and post_ids:
             out.setdefault("middle_plate", []).extend(post_ids)
+        for pid, others in self._contact_sidecar().items():
+            if pid not in part_ids:
+                continue
+            keep = [p for p in others if p in part_ids and p not in out.get(pid, [])]
+            if keep:
+                out.setdefault(pid, []).extend(keep)
         self._contact_excl_map_cache = out
         return out
+
+    def _contact_sidecar(self) -> Dict[str, List[str]]:
+        """`<asmdef>_contacts.json` 的 contact_exclusion_map, 缺失则为空。"""
+        path = re.sub(r"\.asmdef$", "", self.asmdef_path) + "_contacts.json"
+        if not os.path.isfile(path):
+            return {}
+        try:
+            with open(path, encoding="utf-8") as fh:
+                raw = json.load(fh).get("contact_exclusion_map", {})
+            return {str(k): [str(v) for v in vs] for k, vs in raw.items()}
+        except Exception as e:
+            print(f"[contact] 侧车文件不可用 {path}: {e}")
+            return {}
 
     def _part_parent_map(self) -> Dict[str, str]:
         cached = getattr(self, "_part_parent_cache", None)

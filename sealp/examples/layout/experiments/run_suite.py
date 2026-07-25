@@ -42,6 +42,23 @@ CSV_PATH = os.path.join(OUT_ROOT, "experiments_summary.csv")
 ASM_CHAIR = "sealp/assembly_sequence/_demo_output/yuanchair.asmdef"
 ASM_TOWER = "sealp/assembly_sequence/_demo_output/topdown_tower.asmdef"
 
+# Generated 60x60 cm benchmark products (P4x). Unlike the chair/tower there is no
+# lean/full grasp split: one set per distinct MESH serves both search and the L3
+# recheck, so parts sharing a mesh share a grasp set (four post_* on one post.stl).
+# Each asmdef ships a `<name>_contacts.json` sidecar listing the non-parent mates
+# per step, which the searcher folds into its contact-exclusion table.
+ASM_CRF = "sealp/assembly_sequence/_demo_output/cross_rail_frame_v1.asmdef"
+ASM_CUBE = "sealp/assembly_sequence/_demo_output/stack_cube_v1.asmdef"
+ASM_SPIRE = "sealp/assembly_sequence/_demo_output/buttressed_spire_tower_v1.asmdef"
+GRASP_CRF = "sealp/examples/grasp/cross_rail_frame_grasp"
+GRASP_CUBE = "sealp/examples/grasp/stack_cube_grasp"
+GRASP_SPIRE = "sealp/examples/grasp/spire_tower_grasp"
+CRF_PARTS = "base_plate,post_l,post_r,rail_l,rail_r,cap_plate"
+CUBE_PARTS = ("base_plate,post_bl,post_br,post_fl,post_fr,mid_plate,"
+              "clip_nx,clip_px,clip_ny,clip_py")
+SPIRE_PARTS = ("cruciform_base,stepped_core,buttress_w,buttress_e,buttress_s,"
+               "buttress_n,wing_w,wing_e,crown,spire")
+
 # FULL grasp sets (authoritative; used for the final staging_aware L3 recheck).
 GRASP_CHAIR_FULL = "sealp/examples/grasp/yuanchair_grasp"
 GRASP_TOWER_FULL = "sealp/examples/grasp/tower_grasp"
@@ -373,6 +390,55 @@ def build_p4_l3() -> List[Dict]:
     return specs
 
 
+#: P4x cells: (variant, asmdef, grasp dir, part order). Kept as data so the
+#: search runs, the L3-only replay and the runtime estimate all read one list.
+P4X_CELLS = (
+    ("cross_rail_frame", ASM_CRF, GRASP_CRF, CRF_PARTS),
+    ("stack_cube", ASM_CUBE, GRASP_CUBE, CUBE_PARTS),
+    ("spire_tower", ASM_SPIRE, GRASP_SPIRE, SPIRE_PARTS),
+)
+
+
+def _p4x_passthrough(asmdef: str, grasp_dir: str, parts: str) -> List[str]:
+    return ["--asmdef", asmdef, "--grasp-dir", grasp_dir,
+            "--part-order", parts, "--goal-pos", "0.373,0.0,0.0"] + _COARSE_TO_FINE
+
+
+def build_p4x() -> List[Dict]:
+    # Cross-assembly on the generated 60x60 products, exactly the P4 recipe:
+    # frozen backward beam, coarse-to-fine center search, seed 0, then the
+    # staging_aware full-sequence L3 on whatever layout the search commits to.
+    # P4 itself is untouched so its chair/tower rows stay reproducible.
+    #
+    # These products are the harder cross-assembly evidence: the chair stages
+    # four thin legs and the tower six parts, whereas stack_cube and spire_tower
+    # stage nine each, and both mate along five distinct directions instead of
+    # top-down only. Ordered cheapest first (6, then 10, then 10 parts).
+    return [
+        _spec("p4x", variant, variant, 0,
+              _p4x_passthrough(asmdef, grasps, parts),
+              order="backward", state="sequential", l3_check=True,
+              l3_grasp_dir=grasps)
+        for variant, asmdef, grasps, parts in P4X_CELLS
+    ]
+
+
+def build_p4x_l3() -> List[Dict]:
+    # Replay ONLY the staging_aware L3 on the layouts P4x already selected,
+    # reusing each run's original passthrough so the searcher is rebuilt
+    # identically. No search is repeated; missing sources are skipped.
+    specs = []
+    for variant, asmdef, grasps, parts in P4X_CELLS:
+        src = os.path.join(OUT_ROOT, "p4x", f"p4x_{variant}_{variant}_seed0.json")
+        if not os.path.isfile(src):
+            print(f"[p4xl3] skip {variant}: no source result at {src}")
+            continue
+        specs.append(_spec("p4xl3", variant, variant, 0,
+                           _p4x_passthrough(asmdef, grasps, parts),
+                           l3_check=True, l3_grasp_dir=grasps, l3_only=src))
+    return specs
+
+
 def build_p1_tower() -> List[Dict]:
     # P1t: the order comparison on the crowded tower. Everything the chair runs
     # measure is reported here too, but this is the instance where
@@ -471,6 +537,7 @@ def build_p5() -> List[Dict]:
 BUILDERS = {"p1": build_p1, "p1b": build_p1_matched, "p1c": build_p1_dynamic,
             "p1d": build_p1_yawon, "p1l3": build_p1_l3, "p1t": build_p1_tower,
             "p2": build_p2, "p3": build_p3, "p4": build_p4, "p4l3": build_p4_l3,
+            "p4x": build_p4x, "p4xl3": build_p4x_l3,
             "p5": build_p5, "scale": build_scale}
 # Focused suite for the deadline: P1 (core), P2 (state model), scale (scalability
 # curve), P4 (cross-assembly). P3 is reused from the prior run; P5 is dropped
@@ -570,7 +637,8 @@ def main(argv=None) -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--priority", required=True,
                     choices=["p1", "p1b", "p1c", "p1d", "p1l3", "p1t", "p2", "p3",
-                             "p4", "p4l3", "p5", "scale", "focused", "all"],
+                             "p4", "p4l3", "p4x", "p4xl3", "p5", "scale",
+                             "focused", "all"],
                     help="focused/all = the deadline suite (p1,p2,scale,p4); p1b is "
                          "the matched-budget 4-leg headline re-run; p1c is the "
                          "equal-fidelity re-run where forward also certifies against "
@@ -581,9 +649,12 @@ def main(argv=None) -> int:
                          "the L3 check on the "
                          "yaw-on layout P1 already found; p4l3 replays only the "
                          "staging_aware L3 on layouts P4 already found (no search); "
+                         "p4x is the P4 recipe on the generated 60x60 products "
+                         "(cross_rail_frame / stack_cube / spire_tower), p4xl3 "
+                         "replays only their L3; "
                          "p3 is reused from the prior run and p5 is uninformative "
-                         "here. p1b/p1c/p4l3/p3/p5 are excluded from the suite but "
-                         "selectable explicitly.")
+                         "here. p1b/p1c/p4l3/p4x/p4xl3/p3/p5 are excluded from the "
+                         "suite but selectable explicitly.")
     ap.add_argument("--print-only", action="store_true",
                     help="print the exact per-run commands, do not execute.")
     ap.add_argument("--workers", type=int, default=None,
