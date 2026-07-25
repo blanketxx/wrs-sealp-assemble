@@ -56,6 +56,49 @@ yaml.add_representer(float, _float_representer)
 
 FORMAT_VERSION = "1.0"
 
+# This file lives at sealp/assembly_sequence/asmdef.py → sealp package root.
+_SEALP_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _resolve_stored_model_path(raw: str, asmdef_filepath: Path) -> str:
+    """Map cross-machine model paths onto the local sealp/assets tree.
+
+    Asmdefs often store absolute Windows paths from the authoring machine.
+    If that path is missing here, recover via the ``sealp/assets/...`` suffix
+    or a unique basename match under ``sealp/assets``.
+    """
+    raw_s = str(raw or "")
+    if not raw_s:
+        return raw_s
+
+    posix = raw_s.replace("\\", "/")
+    candidates = [
+        Path(raw_s),
+        Path(posix),
+        asmdef_filepath.parent / Path(posix).name,
+    ]
+    marker = "sealp/assets/"
+    if marker in posix:
+        rel_under_sealp = posix[posix.index(marker) + len("sealp/"):]
+        candidates.append(_SEALP_ROOT / rel_under_sealp)
+
+    for cand in candidates:
+        try:
+            if cand.is_file():
+                return str(cand.resolve())
+        except OSError:
+            continue
+
+    basename = Path(posix).name
+    if basename:
+        assets = _SEALP_ROOT / "assets"
+        if assets.is_dir():
+            hits = sorted(p.resolve() for p in assets.rglob(basename) if p.is_file())
+            if len(hits) == 1:
+                return str(hits[0])
+
+    return raw_s
+
 
 # ══════════════════════════════════════════════════════════════
 #  Data classes
@@ -489,11 +532,19 @@ class AssemblyDef:
 
     @classmethod
     def load(cls, filepath: Union[str, Path]) -> "AssemblyDef":
-        """Load from a ``.asmdef`` file."""
+        """Load from a ``.asmdef`` file.
+
+        Model paths authored on another machine (e.g. Windows
+        ``D:\\...\\sealp\\assets\\...``) are remapped to the local
+        ``sealp/assets/...`` tree when the stored path is missing.
+        """
         filepath = Path(filepath)
         with open(filepath, "r", encoding="utf-8") as fh:
             data = yaml.safe_load(fh)
-        return cls.from_dict(data)
+        asm = cls.from_dict(data)
+        for alias, path in list(asm.models.items()):
+            asm.models[alias] = _resolve_stored_model_path(path, filepath)
+        return asm
 
     # ── Pretty printing ──────────────────────────────────────
     def summary(self) -> str:

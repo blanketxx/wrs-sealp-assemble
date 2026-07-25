@@ -6,12 +6,14 @@ consume target staging_xy as input.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 import numpy as np
-import torch
 
 from . import features as F
+
+if TYPE_CHECKING:
+    import torch
 
 STATIC_EDGE_DIM = 10
 PARTIAL_DYN_EDGE_DIM = 14
@@ -156,19 +158,21 @@ def build_partial_dynamic_edge_feature(
 
 
 def build_partial_dynamic_edge_feature_torch(
-    source_xy: torch.Tensor,
-    target_xy: torch.Tensor,
-    source_fp: torch.Tensor,
-    target_fp: torch.Tensor,
-    source_gen: torch.Tensor,
-    target_gen: torch.Tensor,
-    table_bounds: torch.Tensor,
-    order_delta: torch.Tensor,
-    parent_flag: torch.Tensor,
-    scale: torch.Tensor,
-    arm_dist: Optional[torch.Tensor] = None,
-) -> torch.Tensor:
+    source_xy: "torch.Tensor",
+    target_xy: "torch.Tensor",
+    source_fp: "torch.Tensor",
+    target_fp: "torch.Tensor",
+    source_gen: "torch.Tensor",
+    target_gen: "torch.Tensor",
+    table_bounds: "torch.Tensor",
+    order_delta: "torch.Tensor",
+    parent_flag: "torch.Tensor",
+    scale: "torch.Tensor",
+    arm_dist: Optional["torch.Tensor"] = None,
+) -> "torch.Tensor":
     """Batched partial-layout edge features [B, 14], GPU-friendly."""
+    import torch  # local: numpy helpers above must work without torch installed
+
     feat = torch.zeros(
         source_xy.shape[0], PARTIAL_DYN_EDGE_DIM,
         device=source_xy.device, dtype=source_xy.dtype)

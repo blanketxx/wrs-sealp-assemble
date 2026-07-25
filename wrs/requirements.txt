@@ -21,12 +21,13 @@ lxml>=5.2.1
 pyglet>=2.0.15
 psutil>=5.9.4
 sympy>=1.11.1
-torch>=2.0.1+cu117
-torchviz>=0.0.2
+# deep learning (skip for layout / non-DL runs)
+# torch>=2.0.1
+# torchviz>=0.0.2
 decorator>=5.1.1
 requests>=2.31.0
 joblib>=1.2.0
 ipython>=8.11.0
-torchvision>=0.15.2+cu117
-linformer>=0.2.1
+# torchvision>=0.15.2
+# linformer>=0.2.1
 mujoco>=2.3.6
