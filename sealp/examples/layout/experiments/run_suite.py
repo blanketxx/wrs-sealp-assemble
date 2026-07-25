@@ -98,6 +98,17 @@ CHAIR_4LEG_SINGLE = ["--asmdef", ASM_CHAIR, "--grasp-dir", GRASP_CHAIR,
 CHAIR_4LEG_SINGLE_WIDE = ["--asmdef", ASM_CHAIR, "--grasp-dir", GRASP_CHAIR,
                           "--part-order", CHAIR_PARTS_4LEG] + _LEAN_SINGLE_WIDE
 
+# P1d: identical to CHAIR_4LEG_SINGLE_WIDE except yaw refinement is ON. Yaw is a
+# post-search step on the already-selected layout and does not affect the
+# objective, but it does decide the final heading each part is placed at, which
+# in turn decides whether the full L3 motion plan exists -- the yaw-off layouts
+# of P1b both fail L3. Use this preset for any executability claim.
+CHAIR_4LEG_SINGLE_WIDE_YAW = ["--asmdef", ASM_CHAIR, "--grasp-dir", GRASP_CHAIR,
+                              "--part-order", CHAIR_PARTS_4LEG] + \
+                             [("20" if p == "0" and
+                               _LEAN_SINGLE_WIDE[i - 1] == "--yaw-step-deg" else p)
+                              for i, p in enumerate(_LEAN_SINGLE_WIDE)]
+
 # P1c statistical instance: the same reduced 3-leg chair and the same budget as
 # CHAIR_3LEG_SINGLE, with yaw refinement disabled. The iterated forward baseline
 # runs the beam several times, and yaw refinement -- a post-search step on the
@@ -145,6 +156,22 @@ CHAIR_CROSS = ["--asmdef", ASM_CHAIR, "--grasp-dir", GRASP_CHAIR,
                "--part-order", CHAIR_PARTS_4LEG, "--goal-pos", "0.373,0.0,0.0"] + _COARSE_TO_FINE
 TOWER_CROSS = ["--asmdef", ASM_TOWER, "--grasp-dir", GRASP_TOWER,
                "--part-order", TOWER_PARTS, "--goal-pos", "0.373,0.0,0.0"] + _COARSE_TO_FINE
+
+# Order comparison on the CROWDED instance. The chair occupies ~1.7% of the
+# staging area, so a forward pass that omits its undecided suffix is barely
+# penalised and every order-sensitive metric saturates. The tower stages six
+# large plates/posts instead of four thin legs, which is where omitting the
+# suffix should actually cost something. Single fixed center and yaw off keep it
+# affordable; the budget matches _LEAN_SINGLE so the only variable stays the
+# search order.
+TOWER_ORDER_SINGLE = [
+    "--asmdef", ASM_TOWER, "--grasp-dir", GRASP_TOWER,
+    "--part-order", TOWER_PARTS,
+    "--mode", "beam", "--center-search", "single", "--goal-pos", "0.373,0.0,0.0",
+    "--grid-spacing", "0.08", "--cand-per-part", "6", "--beam-width", "4",
+    "--poses-per-xy", "1", "--yaw-step-deg", "0", "--witness-retries", "3",
+    "--workers", "16", "--parallel-level", "auto",
+]
 
 SEEDS_STAT = [0, 1, 2]   # reduced-instance statistical seeds
 
@@ -256,15 +283,21 @@ def build_p1_dynamic() -> List[Dict]:
     # not knowing its suffix. Budget, domain, oracle, grasps, center, seed and
     # workers are identical to P1b, so the P1b backward row is directly reusable
     # (it is re-run here anyway, which doubles as a determinism check).
-    # 3-leg statistical cells, seeds 0/1/2, all three orders at one shared preset
-    # (CHAIR_3LEG_SINGLE_NOYAW). This is where P1 reported forward as "24%
-    # cheaper"; that gap was beam occupancy under the relaxed scene, so it is
-    # re-measured here with forward paying for its own suffix estimate.
+    # 3-leg cells, all three orders at one shared preset (CHAIR_3LEG_SINGLE_NOYAW).
+    # This is where P1 reported forward as "24% cheaper"; that gap was beam
+    # occupancy under the relaxed scene, so it is re-measured here with forward
+    # paying for its own suffix estimate.
+    #
+    # SEED 0 ONLY, deliberately. P1 already ran this instance at seeds 0/1/2 and
+    # every cell came back bit-identical (backward 2.5380 / 336 certs / 9
+    # expansions; forward 2.5380 / 256 / 7; same fingerprint at all three seeds).
+    # The pipeline is deterministic given a config -- the seed only orders witness
+    # retries -- so extra seeds add runtime and zero variance information. Cite the
+    # P1 rows as the determinism evidence instead of re-collecting it.
     specs = [
-        _spec("p1c", f"eqfid_{order}", "chair_3leg", seed, CHAIR_3LEG_SINGLE_NOYAW,
+        _spec("p1c", f"eqfid_{order}", "chair_3leg", 0, CHAIR_3LEG_SINGLE_NOYAW,
               order=order, state="sequential", center_source=FIXED_CENTER_SRC,
               forward_passes=3 if order == "forward_iter" else None)
-        for seed in SEEDS_STAT
         for order in ("backward", "forward", "forward_iter")
     ]
     # 4-leg headline at the matched wide budget, with the staging_aware L3 verdict
@@ -340,6 +373,64 @@ def build_p4_l3() -> List[Dict]:
     return specs
 
 
+def build_p1_tower() -> List[Dict]:
+    # P1t: the order comparison on the crowded tower. Everything the chair runs
+    # measure is reported here too, but this is the instance where
+    # optimistic_certifications and unsound_steps can actually diverge, because
+    # six large staged parts leave little slack for a forward pass that pretends
+    # its undecided suffix is not there. Three orders, seed 0.
+    return [
+        _spec("p1t", f"tower_{order}", "tower", 0, TOWER_ORDER_SINGLE,
+              order=order, state="sequential", center_source=FIXED_CENTER_SRC,
+              forward_passes=3 if order == "forward_iter" else None)
+        for order in ("backward", "forward", "forward_iter")
+    ]
+
+
+def build_p1_l3() -> List[Dict]:
+    # Replay ONLY the staging_aware L3 (against the FULL grasp set) on the yaw-ON
+    # 4-leg layout P1 already selected. P1 ran no L3 at all, so forward's yaw-on
+    # layout has never been checked for executability -- the one backward yaw-on
+    # layout known to pass L3 (bsfs_4leg_gate.json) came from a different,
+    # pre-experiment configuration and is NOT a matched counterpart. No search is
+    # repeated. P1's backward cell has no layout to replay: it exhausted the beam
+    # at that budget, which is why only forward appears here.
+    specs = []
+    src = os.path.join(OUT_ROOT, "p1",
+                       "p1_headline_forward_chair_4leg_seed0.json")
+    if os.path.isfile(src):
+        specs.append(_spec("p1l3", "headline_forward_yawon", "chair_4leg", 0,
+                           CHAIR_4LEG_SINGLE, l3_check=True,
+                           l3_grasp_dir=GRASP_CHAIR_FULL, l3_only=src,
+                           center_source=FIXED_CENTER_SRC))
+    else:
+        print(f"[p1l3] skip: no source result at {src}")
+    return specs
+
+
+def build_p1_yawon() -> List[Dict]:
+    # P1d: a YAW ABLATION, not an order comparison. P1b runs the matched wide
+    # budget with yaw refinement OFF and its layout fails staging_aware L3 at step
+    # 3, so P1b alone cannot exhibit a deployable layout. This run is P1b with the
+    # single change --yaw-step-deg 0 -> 20, closing that loop: same search, same
+    # budget, yaw on, staging_aware L3 against the full grasp set.
+    #
+    # ONE cell (backward) on purpose. P1b's two orders returned the SAME
+    # layout_fingerprint, i.e. yaw refinement would receive a byte-identical
+    # assignment in both cells; yaw refinement is a deterministic post-search step
+    # (BLAS pinned to one thread, near-ties broken by smallest yaw angle), so a
+    # forward cell here is provably identical to this one. Yaw dominates wall-clock
+    # (~97%: 6955 s vs 164 s on this instance), so measuring a provable tie would
+    # cost ~2 h for no information. If a reviewer asks for the forward cell, add
+    # "forward" back to the tuple below -- the preset is already shared.
+    return [
+        _spec("p1d", f"yawon_{order}", "chair_4leg", 0, CHAIR_4LEG_SINGLE_WIDE_YAW,
+              order=order, state="sequential", l3_check=True,
+              center_source=FIXED_CENTER_SRC, l3_grasp_dir=GRASP_CHAIR_FULL)
+        for order in ("backward",)
+    ]
+
+
 def build_scale() -> List[Dict]:
     # Scalability curve: backward vs forward beam over 1..4 legs (single center,
     # small lean domain, seed 0). Records certifications / node_expansions /
@@ -378,6 +469,7 @@ def build_p5() -> List[Dict]:
 
 
 BUILDERS = {"p1": build_p1, "p1b": build_p1_matched, "p1c": build_p1_dynamic,
+            "p1d": build_p1_yawon, "p1l3": build_p1_l3, "p1t": build_p1_tower,
             "p2": build_p2, "p3": build_p3, "p4": build_p4, "p4l3": build_p4_l3,
             "p5": build_p5, "scale": build_scale}
 # Focused suite for the deadline: P1 (core), P2 (state model), scale (scalability
@@ -477,12 +569,17 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--priority", required=True,
-                    choices=["p1", "p1b", "p1c", "p2", "p3", "p4", "p4l3", "p5",
-                             "scale", "focused", "all"],
+                    choices=["p1", "p1b", "p1c", "p1d", "p1l3", "p1t", "p2", "p3",
+                             "p4", "p4l3", "p5", "scale", "focused", "all"],
                     help="focused/all = the deadline suite (p1,p2,scale,p4); p1b is "
                          "the matched-budget 4-leg headline re-run; p1c is the "
                          "equal-fidelity re-run where forward also certifies against "
-                         "an occupied staging area; p4l3 replays only the "
+                         "an occupied staging area; p1t is that same comparison on "
+                         "the CROWDED tower, where the order-sensitive metrics can "
+                         "actually diverge; p1d is the yaw ablation that turns P1b's "
+                         "L3-failing layout into a deployable one; p1l3 replays only "
+                         "the L3 check on the "
+                         "yaw-on layout P1 already found; p4l3 replays only the "
                          "staging_aware L3 on layouts P4 already found (no search); "
                          "p3 is reused from the prior run and p5 is uninformative "
                          "here. p1b/p1c/p4l3/p3/p5 are excluded from the suite but "

@@ -68,14 +68,19 @@ def _scene_for_step(pid: str, decided: Dict[str, Dict], pick_order: List[str],
                     preassembled_pid: Optional[str], order: str, state_model: str,
                     station_xy: np.ndarray, searcher,
                     prior: Optional[Dict[str, Dict]] = None):
-    """Return (placed_list, applied_poses, staged_list) describing the obstacle
-    scene when certifying ``pid``.
+    """Return (placed_list, applied_poses, staged_list, n_absent) describing the
+    obstacle scene when certifying ``pid``.
 
     ``applied_poses`` is the list of {pid,xy,rot_name} the worker must apply as
     staging poses so that _step_obstacles reflects the intended state (decided
     parts at their real staging xy; parts that must be ABSENT are parked far).
     ``placed_list`` are parts pinned at GOAL. ``staged_list`` are the parts that
     count as *real* staging obstacles (for active collision / clearance).
+
+    ``n_absent`` counts the parts that execution would have sitting at staging
+    but that this scene omits. It is 0 for every backward step by construction,
+    and positive for forward steps whose suffix is still undecided, which is what
+    makes a certification issued under this scene optimistic.
     """
     aidx = _assembly_index(pick_order)
     others = [q for q in pick_order if q != pid]
@@ -91,12 +96,13 @@ def _scene_for_step(pid: str, decided: Dict[str, Dict], pick_order: List[str],
         placed.add(preassembled_pid)
     applied = []          # staging poses to apply in the worker
     staged = []           # real staging obstacles (decided)
+    absent = 0            # parts execution would have at staging but this omits
 
     if state_model == "static_final":
         # every other pickable part at GOAL; nothing at staging.
         for q in others:
             placed.add(q)
-        return sorted(placed), applied, staged
+        return sorted(placed), applied, staged, absent
 
     if state_model == "static_start":
         # every other pickable part at STAGING; only decided ones are known.
@@ -107,7 +113,8 @@ def _scene_for_step(pid: str, decided: Dict[str, Dict], pick_order: List[str],
                 staged.append(q)
             else:
                 applied.append({"pid": q, "xy": far_xy, "rot_name": _first_rot(q)})
-        return sorted(placed), applied, staged
+                absent += 1
+        return sorted(placed), applied, staged, absent
 
     # ---- sequential (physically correct step state) ----
     for q in others:
@@ -131,7 +138,8 @@ def _scene_for_step(pid: str, decided: Dict[str, Dict], pick_order: List[str],
                 staged.append(q)
             else:
                 applied.append({"pid": q, "xy": far_xy, "rot_name": _first_rot(q)})
-    return sorted(placed), applied, staged
+                absent += 1
+    return sorted(placed), applied, staged, absent
 
 
 def _prior_key(prior: Optional[Dict[str, Dict]]) -> tuple:
@@ -212,7 +220,7 @@ def experimental_search_site(searcher, args, station, mode, stats, verbose=True,
                     occupied.extend(np.asarray(r["xy"], dtype=float)
                                     for q, r in prior.items()
                                     if q != pid and q not in decided)
-                placed_list, applied, staged_list = _scene_for_step(
+                placed_list, applied, staged_list, n_absent = _scene_for_step(
                     pid, decided, pick_order, preassembled_pid, order, state_model,
                     station_xy, searcher, prior=prior)
                 for xi, xy in enumerate(cand_xy[pid]):
@@ -234,6 +242,9 @@ def experimental_search_site(searcher, args, station, mode, stats, verbose=True,
                                               seed_tag),
                         })
                         meta.append((ni, xi, ci, key))
+                        if n_absent:
+                            LAST_RUN_STATS["optimistic_certifications"] = \
+                                LAST_RUN_STATS.get("optimistic_certifications", 0) + 1
 
             stats["certifications"] += len(tasks)
             if cert_batch_fn is not None:
@@ -302,6 +313,55 @@ def experimental_search_site(searcher, args, station, mode, stats, verbose=True,
             LAST_RUN_STATS["prior_converged"] = 1
             break
         prior = nxt
+
+    # ---- suffix-soundness audit of the layout actually returned ----
+    # Total certification counts saturate at the beam's capacity (beam_width x
+    # domain size), so once both orders keep their beams full the counts are
+    # identical and say nothing about search order. What still differs is whether
+    # each certification was issued against the scene execution will really
+    # present. This audit re-certifies every step of the FINAL layout under the
+    # true sequential state -- suffix parts at the staging poses the layout
+    # actually assigns them, prefix parts at goal -- and counts the steps whose
+    # search-time verdict does not survive. Backward's search scene already IS
+    # that scene at every step, so it must audit clean; a forward step certified
+    # with its suffix absent need not. The cost is one certification per part
+    # (4 for the chair, against ~928 for the search itself), and it is billed to
+    # its own counter so the headline certification count stays comparable.
+    if result:
+        best = result[0]
+        audit_tasks = []
+        for pid in pick_order:
+            if pid not in best:
+                continue
+            decided_all = {q: r for q, r in best.items() if q != pid}
+            placed_list, applied, staged_list, n_absent = _scene_for_step(
+                pid, decided_all, pick_order, preassembled_pid,
+                "backward", "sequential", station_xy, searcher)
+            rot = str(best[pid]["rot_name"])
+            audit_tasks.append({
+                "suffix": applied, "pid": pid,
+                "xy": [float(best[pid]["xy"][0]), float(best[pid]["xy"][1])],
+                "rot_name": rot, "placed": placed_list,
+                "staged": list(staged_list), "level": level,
+                "seed": task_seed(base_seed, cid, 0, pid, 0, rot, "audit"),
+            })
+        if audit_tasks:
+            if cert_batch_fn is not None:
+                audit_res = cert_batch_fn(audit_tasks)
+            else:
+                audit_res = [_certify_local(oracle, searcher, station,
+                                            preassembled_pid, t)
+                             for t in audit_tasks]
+            unsound = [t["pid"] for t, r in zip(audit_tasks, audit_res)
+                       if r.get("rec") is None]
+            LAST_RUN_STATS["audit_certifications"] = len(audit_tasks)
+            LAST_RUN_STATS["unsound_steps"] = len(unsound)
+            LAST_RUN_STATS["unsound_parts"] = ",".join(unsound)
+            if verbose:
+                print(f"[exp:{order}/{state_model}] suffix-soundness audit: "
+                      f"{len(unsound)}/{len(audit_tasks)} step(s) do NOT hold under "
+                      f"the true sequential state"
+                      + (f" -> {','.join(unsound)}" if unsound else ""))
 
     # complete leaves = number of complete assignments returned by this site.
     LAST_RUN_STATS["complete_leaves"] = (

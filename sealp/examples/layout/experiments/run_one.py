@@ -61,7 +61,10 @@ CSV_COLUMNS = [
     "workers", "parallel_level", "success",
     "objective_cost", "ref_cost", "optimality_gap",
     "runtime_s", "time_to_first_feasible_s",
-    "oracle_certifications", "node_expansions",
+    "search_time_s", "yaw_time_s",
+    "oracle_certifications", "optimistic_certifications",
+    "unsound_steps", "unsound_parts", "audit_certifications",
+    "node_expansions",
     "complete_leaves", "witness_calls", "deferred_witness_attempts",
     "hard_prunes", "hall_prunes", "propagation_prunes",
     "min_common_grasp", "num_parts",
@@ -228,6 +231,12 @@ def _extract_row(result: Optional[Dict], meta: Dict, ref_cost: Optional[float],
         t = result.get("timing", {})
         row["runtime_s"] = t.get("total_runtime", "")
         row["time_to_first_feasible_s"] = t.get("time_to_first_feasible", "")
+        # yaw refinement is a post-search step on the already-selected layout and
+        # is identical for every search order, yet it dominated total_runtime
+        # (~97% on the 4-leg chair). Any timing comparison between orders must
+        # use search_time_s, never runtime_s.
+        row["search_time_s"] = t.get("time_bsfs", "")
+        row["yaw_time_s"] = t.get("time_yaw_refinement", "")
         b = result.get("bsfs_stats", {})
         row["oracle_certifications"] = b.get("oracle_certifications", "")
         row["node_expansions"] = b.get("node_expansions", "")
@@ -417,6 +426,12 @@ def main(argv=None) -> int:
         cl = exp_search.LAST_RUN_STATS.get("complete_leaves")
         if cl:
             row["complete_leaves"] = int(cl)
+        for col, key in (("optimistic_certifications", "optimistic_certifications"),
+                         ("unsound_steps", "unsound_steps"),
+                         ("unsound_parts", "unsound_parts"),
+                         ("audit_certifications", "audit_certifications")):
+            if key in exp_search.LAST_RUN_STATS:
+                row[col] = exp_search.LAST_RUN_STATS[key]
         _merge_json(out_json, {
             "exp_order": a.exp_order,
             "exp_state": a.exp_state,
