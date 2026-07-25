@@ -1,0 +1,290 @@
+{
+  "method": "BSFS-beam",
+  "asmdef": "sealp/assembly_sequence/_demo_output/yuanchair.asmdef",
+  "num_parts": 4,
+  "witness_status": "L2_PASS",
+  "objective_cost": 2.5380112544666593,
+  "layout_fingerprint": "C0.3730,0.0000|leg_bl:0.4340,0.2005:identity_y000|leg_br:0.4340,-0.2005:identity_y000|leg_fl:0.0330,0.2005:identity_y000|beam|0.08|6|1|4|0.1|0.005|0.001|False|False|seat,leg_bl,leg_br,leg_fl",
+  "execution": {
+    "workers": 16,
+    "parallel_level": "candidates",
+    "center_search_mode": "single",
+    "seed": 2,
+    "worker_tasks_submitted": 256,
+    "worker_tasks_completed": 256
+  },
+  "center_search": {
+    "mode": "single",
+    "stage2_skipped": true,
+    "stage3_skipped": true,
+    "stage4_skipped": true,
+    "coarse_centers_total": 0,
+    "coarse_centers_hard_rejected": 0,
+    "coarse_centers_survived": 0,
+    "coarse_centers_retained": 0,
+    "refined_centers_generated": 0,
+    "refined_centers_unique": 0,
+    "full_bsfs_centers_evaluated": 1
+  },
+  "timing": {
+    "time_load": 2.54,
+    "time_center_generation": 0.0,
+    "time_center_screening": 0.0,
+    "time_center_refinement": 0.0,
+    "time_bsfs": 1048.29,
+    "time_to_first_feasible": 1048.29,
+    "time_yaw_refinement": 3111.79,
+    "time_final_witness": 179.21,
+    "total_runtime": 4522.61
+  },
+  "bsfs_stats": {
+    "oracle_certifications": 256,
+    "node_expansions": 7,
+    "hard_prunes": 166,
+    "hall_prunes": 0,
+    "propagation_prunes": 0,
+    "beam_width": 4,
+    "max_depth_certified": 3
+  },
+  "witness": {
+    "witness_retries_configured": 3,
+    "full_witness_calls": 5,
+    "witness_attempts_total": 5,
+    "cached_witness_reuses": 0,
+    "configured_retries": 3,
+    "attempts": [
+      {
+        "retry": 0,
+        "seed": 1054098283,
+        "result": "SUCCESS"
+      }
+    ],
+    "successful_retry_index": 0,
+    "reused_from_cache": false,
+    "fingerprint": "C0.3730,0.0000|leg_bl:0.4340,0.2005:identity_y000|leg_br:0.4340,-0.2005:identity_y000|leg_fl:0.0330,0.2005:identity_y000|beam|0.08|6|1|4|0.1|0.005|0.001|False|False|seat,leg_bl,leg_br,leg_fl",
+    "seeds": [
+      1054098283
+    ]
+  },
+  "grasp_robustness": {
+    "per_step_common_grasp_count": {
+      "leg_bl": 4,
+      "leg_br": 4,
+      "leg_fl": 1
+    },
+    "min_common_grasp_count": 1
+  },
+  "per_step_certification": {
+    "leg_fl": {
+      "pid": "leg_fl",
+      "xy": [
+        0.03300000040233138,
+        0.20049999959766862
+      ],
+      "rot_name": "identity_y000",
+      "pose_tag": "fs_yaw",
+      "arm": "lft",
+      "gids": [
+        42
+      ],
+      "footprint": [
+        0.039000000804662704,
+        0.039000000804662704
+      ],
+      "common_grasp_count": 1,
+      "manipulability": 0.004517432673085865,
+      "clearance": 0.3947154032528751,
+      "dist_to_goal": 0.2998837269305098,
+      "cost": 0.9020179325207682,
+      "cost_lb": 0.30005041189395587,
+      "certified": true,
+      "yaw_deg": 0.0
+    },
+    "leg_br": {
+      "pid": "leg_br",
+      "xy": [
+        0.4339999995976686,
+        -0.20049999959766862
+      ],
+      "rot_name": "identity_y000",
+      "pose_tag": "fs_yaw",
+      "arm": "lft",
+      "gids": [
+        189,
+        209,
+        216,
+        126
+      ],
+      "footprint": [
+        0.039000000804662704,
+        0.039000000804662704
+      ],
+      "common_grasp_count": 4,
+      "manipulability": 0.014557314838706037,
+      "clearance": 0.2095739721186309,
+      "dist_to_goal": 0.13080997631004096,
+      "cost": 0.8179966609729457,
+      "cost_lb": 0.13119165332532964,
+      "certified": true,
+      "yaw_deg": 0.0
+    },
+    "leg_bl": {
+      "pid": "leg_bl",
+      "xy": [
+        0.4339999995976686,
+        0.20049999959766862
+      ],
+      "rot_name": "identity_y000",
+      "pose_tag": "fs_yaw",
+      "arm": "lft",
+      "gids": [
+        189,
+        209,
+        216,
+        126
+      ],
+      "footprint": [
+        0.039000000804662704,
+        0.039000000804662704
+      ],
+      "common_grasp_count": 4,
+      "manipulability": 0.014557314809318458,
+      "clearance": 0.2095739721186309,
+      "dist_to_goal": 0.13080997631004096,
+      "cost": 0.8179966609729457,
+      "cost_lb": 0.13119165332532964,
+      "certified": true,
+      "yaw_deg": 0.0
+    }
+  },
+  "assembly_center": [
+    0.373,
+    0.0,
+    0.0
+  ],
+  "layout_score": 0.37387421561151435,
+  "total_cost": 2.5380112544666593,
+  "l2_pass": true,
+  "l3_pass": false,
+  "preassembled_part": "seat",
+  "picked_parts": [
+    "leg_bl",
+    "leg_br",
+    "leg_fl"
+  ],
+  "best_layout": {
+    "leg_bl": {
+      "init_pos": [
+        0.4339999995976686,
+        0.20049999959766862,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "fs_yaw",
+      "arm_choice": "lft",
+      "grasp_count": 4,
+      "manipulability": 0.014557314809318458,
+      "dist_to_goal": 0.13119165332532964,
+      "rot_name": "identity_y000",
+      "yaw_deg": 0.0,
+      "gids": [
+        189,
+        209,
+        216,
+        126
+      ]
+    },
+    "leg_br": {
+      "init_pos": [
+        0.4339999995976686,
+        -0.20049999959766862,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "fs_yaw",
+      "arm_choice": "lft",
+      "grasp_count": 4,
+      "manipulability": 0.014557314838706037,
+      "dist_to_goal": 0.13119165332532964,
+      "rot_name": "identity_y000",
+      "yaw_deg": 0.0,
+      "gids": [
+        189,
+        209,
+        216,
+        126
+      ]
+    },
+    "leg_fl": {
+      "init_pos": [
+        0.03300000040233138,
+        0.20049999959766862,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "fs_yaw",
+      "arm_choice": "lft",
+      "grasp_count": 1,
+      "manipulability": 0.004517432673085865,
+      "dist_to_goal": 0.30005041189395587,
+      "rot_name": "identity_y000",
+      "yaw_deg": 0.0,
+      "gids": [
+        42
+      ]
+    },
+    "seat": {
+      "init_pos": [
+        0.373,
+        0.0,
+        0.0
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "preassembled_at_assembly_region",
+      "arm_choice": "preassembled",
+      "grasp_count": 20,
+      "manipulability": 0.0,
+      "dist_to_goal": 0.0
+    }
+  }
+}
