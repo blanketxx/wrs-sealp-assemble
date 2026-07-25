@@ -61,7 +61,10 @@ CSV_COLUMNS = [
     "workers", "parallel_level", "success",
     "objective_cost", "ref_cost", "optimality_gap",
     "runtime_s", "time_to_first_feasible_s",
-    "oracle_certifications", "node_expansions",
+    "search_time_s", "yaw_time_s",
+    "oracle_certifications", "optimistic_certifications",
+    "unsound_steps", "unsound_parts", "audit_certifications",
+    "node_expansions",
     "complete_leaves", "witness_calls", "deferred_witness_attempts",
     "hard_prunes", "hall_prunes", "propagation_prunes",
     "min_common_grasp", "num_parts",
@@ -90,8 +93,19 @@ def _unique_json_path(out_dir: str, run_id: str) -> str:
     return path
 
 
+def _merge_json(path: str, extra: Dict) -> None:
+    """Fold extra bookkeeping into an already-written per-run JSON."""
+    if not os.path.exists(path):
+        return
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    data.update(extra)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+
+
 def _apply_patches(order: Optional[str], state: Optional[str],
-                   hall_off: bool, prop_off: bool) -> None:
+                   hall_off: bool, prop_off: bool, forward_passes: int = 1) -> None:
     import sealp.examples.layout.bsfs.run as run
     import sealp.examples.layout.bsfs.search as search
 
@@ -99,16 +113,18 @@ def _apply_patches(order: Optional[str], state: Optional[str],
         from sealp.examples.layout.experiments.exp_search import experimental_search_site
         _order = order or "backward"
         _state = state or "sequential"
+        _passes = max(int(forward_passes), 1)
 
         def _patched_site(searcher, args, station, mode, stats,
                           verbose=True, cert_batch_fn=None):
             return experimental_search_site(
                 searcher, args, station, mode, stats, verbose=verbose,
-                cert_batch_fn=cert_batch_fn, order=_order, state_model=_state)
+                cert_batch_fn=cert_batch_fn, order=_order, state_model=_state,
+                forward_passes=_passes)
 
         run.search_site = _patched_site
         print(f"[run_one] patched search_site -> experimental "
-              f"(order={_order}, state_model={_state})")
+              f"(order={_order}, state_model={_state}, passes={_passes})")
 
     if hall_off:
         search.hall_feasible = lambda remaining, cells, occ: True
@@ -215,6 +231,12 @@ def _extract_row(result: Optional[Dict], meta: Dict, ref_cost: Optional[float],
         t = result.get("timing", {})
         row["runtime_s"] = t.get("total_runtime", "")
         row["time_to_first_feasible_s"] = t.get("time_to_first_feasible", "")
+        # yaw refinement is a post-search step on the already-selected layout and
+        # is identical for every search order, yet it dominated total_runtime
+        # (~97% on the 4-leg chair). Any timing comparison between orders must
+        # use search_time_s, never runtime_s.
+        row["search_time_s"] = t.get("time_bsfs", "")
+        row["yaw_time_s"] = t.get("time_yaw_refinement", "")
         b = result.get("bsfs_stats", {})
         row["oracle_certifications"] = b.get("oracle_certifications", "")
         row["node_expansions"] = b.get("node_expansions", "")
@@ -308,7 +330,13 @@ def main(argv=None) -> int:
     ap.add_argument("--variant", required=True)
     ap.add_argument("--task", required=True)
     ap.add_argument("--seed", type=int, required=True)
-    ap.add_argument("--exp-order", choices=["backward", "forward"], default=None)
+    ap.add_argument("--exp-order",
+                    choices=["backward", "forward", "forward_iter"], default=None)
+    ap.add_argument("--exp-forward-passes", type=int, default=2,
+                    help="number of forward passes when --exp-order forward_iter: "
+                         "each pass after the first re-certifies against the suffix "
+                         "staging estimate from the previous one, and stops early on "
+                         "a fixed point. Ignored for backward/forward.")
     ap.add_argument("--exp-state",
                     choices=["sequential", "static_start", "static_final"], default=None)
     ap.add_argument("--exp-hall", choices=["on", "off"], default="on")
@@ -347,7 +375,9 @@ def main(argv=None) -> int:
 
     hall_off = (a.exp_hall == "off")
     prop_off = (a.exp_prop == "off")
-    _apply_patches(a.exp_order, a.exp_state, hall_off, prop_off)
+    _apply_patches(a.exp_order, a.exp_state, hall_off, prop_off,
+                   forward_passes=(a.exp_forward_passes
+                                   if a.exp_order == "forward_iter" else 1))
 
     argv_run = passthrough + ["--seed", str(a.seed), "--output-json", out_json]
 
@@ -388,12 +418,27 @@ def main(argv=None) -> int:
     # across backward/forward variants).
     row["center_source"] = a.center_source
 
-    # extra metric surfaced by the experimental search (same process as main).
+    # extra metrics surfaced by the experimental search (same process as main).
+    # The CSV schema is frozen so previously written rows stay aligned; the
+    # multi-pass bookkeeping goes into the per-run JSON instead.
     try:
         import sealp.examples.layout.experiments.exp_search as exp_search
         cl = exp_search.LAST_RUN_STATS.get("complete_leaves")
         if cl:
             row["complete_leaves"] = int(cl)
+        for col, key in (("optimistic_certifications", "optimistic_certifications"),
+                         ("unsound_steps", "unsound_steps"),
+                         ("unsound_parts", "unsound_parts"),
+                         ("audit_certifications", "audit_certifications")):
+            if key in exp_search.LAST_RUN_STATS:
+                row[col] = exp_search.LAST_RUN_STATS[key]
+        _merge_json(out_json, {
+            "exp_order": a.exp_order,
+            "exp_state": a.exp_state,
+            "exp_passes_run": int(exp_search.LAST_RUN_STATS.get("passes_run", 1)),
+            "exp_prior_converged": bool(exp_search.LAST_RUN_STATS.get(
+                "prior_converged", 0)),
+        })
     except Exception:
         pass
 

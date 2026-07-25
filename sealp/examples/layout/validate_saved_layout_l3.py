@@ -37,6 +37,38 @@ def _fresh_stats() -> dict:
     }
 
 
+def _write_back(path: str, obstacle_mode: str, ok: bool, cand, grasp_dir: str) -> None:
+    """Record this verdict in the result JSON under its own key.
+
+    The existing ``l3_pass`` field is left untouched: it is the in-run mesh-mode
+    L3 flag, a deliberately over-strict check the pipeline does not use as a
+    selection filter, so it reads False even for layouts that pass the
+    staging_aware full-sequence witness. Overwriting it would destroy that
+    distinction; a separate key with explicit provenance keeps both verdicts
+    readable and makes clear which one was measured how.
+    """
+    import datetime as _dt
+
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    data["l3_staging_aware"] = {
+        "verdict": "PASS" if ok else "FAIL",
+        "obstacle_mode": obstacle_mode,
+        "grasp_dir": grasp_dir,
+        "fail_reason": "" if ok else str(getattr(cand, "l3_fail_reason", "")),
+        "measured_at": _dt.datetime.now().isoformat(timespec="seconds"),
+        "measured_by": "sealp.examples.layout.validate_saved_layout_l3",
+        "note": ("Full-sequence L3 replay of the saved layout; no search was "
+                 "rerun. Distinct from the 'l3_pass' field, which is the "
+                 "over-strict in-run mesh-mode flag and is not a selection "
+                 "criterion in this pipeline."),
+    }
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+    print(f"[write-back] l3_staging_aware = {data['l3_staging_aware']['verdict']} "
+          f"-> {path}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--result-json", required=True)
@@ -46,6 +78,10 @@ def main() -> None:
     ap.add_argument("--part-order", required=True)
     ap.add_argument("--obstacle-mode", default="staging_aware")
     ap.add_argument("--seed", default="0")
+    ap.add_argument("--write-back", action="store_true",
+                    help="record the verdict in the result JSON under the "
+                         "'l3_staging_aware' key (leaves the unrelated in-run "
+                         "'l3_pass' flag untouched).")
     cli = ap.parse_args()
 
     with open(cli.result_json, "r", encoding="utf-8") as fh:
@@ -121,6 +157,9 @@ def main() -> None:
         print(f"FINAL L3 VERDICT: FAIL  (obstacle_mode={cli.obstacle_mode})")
         print(f"  l3_fail_reason: {getattr(cand, 'l3_fail_reason', '')}")
     print("=" * 70)
+
+    if cli.write_back:
+        _write_back(cli.result_json, cli.obstacle_mode, ok, cand, cli.grasp_dir)
 
 
 if __name__ == "__main__":
