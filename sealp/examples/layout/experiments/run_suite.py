@@ -2,7 +2,7 @@
 
 Runs each experiment configuration STRICTLY SEQUENTIALLY, one isolated
 subprocess per run (``run_one``), never two WRS processes at once. Every Beam run
-uses workers=4; Exact A* is serial. Each run writes its own JSON and appends a
+uses workers=16; Exact A* is serial. Each run writes its own JSON and appends a
 row to the single summary CSV; nothing is overwritten; failed runs are recorded.
 
 This driver DOES NOT run smoke / reproducibility / validation tests. It only
