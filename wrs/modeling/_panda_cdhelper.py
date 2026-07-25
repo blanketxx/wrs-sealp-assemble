@@ -331,6 +331,24 @@ def gen_pdndp_wireframe(trm_model,
 #     else:
 #         return False, np.asarray([]) if toggle_contacts else False
 
+def surface_points(cd_handler):
+    """
+    contact surface points of a finished traversal, in world coordinates
+    ``base`` (the Panda3D ShowBase) exists only in a rendering session, while the
+    surface points are consumed solely by debug drawing. In a headless run --
+    batch planning, multiprocessing workers -- resolving them would raise
+    NameError and abort the caller's planning loop, so return no points instead.
+    :param cd_handler: a CollisionHandlerQueue that has already been traversed
+    :return: np array of contact points, empty when running without a ShowBase
+    """
+    try:
+        render_ndp = base.render
+    except NameError:
+        return np.asarray([])
+    return np.asarray([da.pdvec3_to_npvec3(cd_entry.getSurfacePoint(render_ndp))
+                       for cd_entry in cd_handler.getEntries()])
+
+
 def is_collided(cmodel_list0, cmodel_list1, toggle_contacts=False):
     """
     detect the collision between collision models
@@ -368,10 +386,7 @@ def is_collided(cmodel_list0, cmodel_list1, toggle_contacts=False):
         cmodel.detach_cdprim()
     if cd_handler.getNumEntries() > 0:
         if toggle_contacts:
-            contact_points = np.asarray([da.pdvec3_to_npvec3(cd_entry.getSurfacePoint(base.render)) for cd_entry in
-                                         cd_handler.getEntries()])
-            print(contact_points)
-            return True, contact_points
+            return True, surface_points(cd_handler)
         else:
             return True
     else:

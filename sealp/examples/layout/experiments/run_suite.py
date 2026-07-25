@@ -153,7 +153,7 @@ FIXED_CENTER_SRC = ("single@goal_pos=(0.373,0.0,0.0); predetermined "
 def _spec(priority, variant, task, seed, passthrough,
           order=None, state=None, hall="on", prop="on", mode=None,
           needs_ref=False, l3_check=False, center_source="",
-          l3_grasp_dir="") -> Dict:
+          l3_grasp_dir="", l3_only="") -> Dict:
     pt = list(passthrough)
     if mode is not None:
         pt = _override_mode(pt, mode)
@@ -162,6 +162,7 @@ def _spec(priority, variant, task, seed, passthrough,
         "order": order, "state": state, "hall": hall, "prop": prop,
         "passthrough": pt, "needs_ref": needs_ref, "l3_check": l3_check,
         "center_source": center_source, "l3_grasp_dir": l3_grasp_dir,
+        "l3_only": l3_only,
     }
 
 
@@ -273,6 +274,24 @@ def build_p4() -> List[Dict]:
     ]
 
 
+def build_p4_l3() -> List[Dict]:
+    # Replay ONLY the staging_aware L3 on the layouts P4 has already selected,
+    # reusing each run's original passthrough so the searcher is rebuilt
+    # identically. No search is repeated. Sources that do not exist yet are
+    # skipped, so this is safe to run before the whole of P4 has finished.
+    specs = []
+    for variant, task, pt, grasps in (
+            ("chair", "chair", CHAIR_CROSS, GRASP_CHAIR_FULL),
+            ("tower", "tower", TOWER_CROSS, GRASP_TOWER_FULL)):
+        src = os.path.join(OUT_ROOT, "p4", f"p4_{variant}_{task}_seed0.json")
+        if not os.path.isfile(src):
+            print(f"[p4l3] skip {variant}: no source result at {src}")
+            continue
+        specs.append(_spec("p4l3", variant, task, 0, pt, l3_check=True,
+                           l3_grasp_dir=grasps, l3_only=src))
+    return specs
+
+
 def build_scale() -> List[Dict]:
     # Scalability curve: backward vs forward beam over 1..4 legs (single center,
     # small lean domain, seed 0). Records certifications / node_expansions /
@@ -311,7 +330,8 @@ def build_p5() -> List[Dict]:
 
 
 BUILDERS = {"p1": build_p1, "p1b": build_p1_matched, "p2": build_p2,
-            "p3": build_p3, "p4": build_p4, "p5": build_p5, "scale": build_scale}
+            "p3": build_p3, "p4": build_p4, "p4l3": build_p4_l3,
+            "p5": build_p5, "scale": build_scale}
 # Focused suite for the deadline: P1 (core), P2 (state model), scale (scalability
 # curve), P4 (cross-assembly). P3 is reused from the prior run; P5 is dropped
 # (uninformative on the tractable instance). Run p3/p5 explicitly if desired.
@@ -342,6 +362,8 @@ def _run_one_cmd(spec: Dict, ref_cost: Optional[float]) -> List[str]:
         cmd += ["--l3-check", "staging_aware"]
     if spec.get("l3_grasp_dir"):
         cmd += ["--l3-grasp-dir", spec["l3_grasp_dir"]]
+    if spec.get("l3_only"):
+        cmd += ["--l3-only", spec["l3_only"]]
     if spec.get("center_source"):
         cmd += ["--center-source", spec["center_source"]]
     cmd += ["--"] + list(spec["passthrough"])
@@ -405,12 +427,14 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--priority", required=True,
-                    choices=["p1", "p1b", "p2", "p3", "p4", "p5", "scale",
+                    choices=["p1", "p1b", "p2", "p3", "p4", "p4l3", "p5", "scale",
                              "focused", "all"],
                     help="focused/all = the deadline suite (p1,p2,scale,p4); p1b is "
-                         "the matched-budget 4-leg headline re-run; p3 is reused from "
-                         "the prior run and p5 is uninformative here, so p1b/p3/p5 are "
-                         "excluded from the suite but selectable explicitly.")
+                         "the matched-budget 4-leg headline re-run; p4l3 replays only "
+                         "the staging_aware L3 on layouts P4 already found (no "
+                         "search); p3 is reused from the prior run and p5 is "
+                         "uninformative here. p1b/p4l3/p3/p5 are excluded from the "
+                         "suite but selectable explicitly.")
     ap.add_argument("--print-only", action="store_true",
                     help="print the exact per-run commands, do not execute.")
     ap.add_argument("--workers", type=int, default=None,
