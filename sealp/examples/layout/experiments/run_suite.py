@@ -20,7 +20,7 @@ Usage:
 
 Output layout:
     sealp/examples/layout/experiments/_output/
-        p1/ p1b/ p2/ p3/ p4/ p5/ scale/    # one JSON per run
+        p1/ p1b/ p1c/ p2/ p3/ p4/ p5/ scale/   # one JSON per run
         experiments_summary.csv            # appended, never overwritten
 """
 from __future__ import annotations
@@ -98,6 +98,17 @@ CHAIR_4LEG_SINGLE = ["--asmdef", ASM_CHAIR, "--grasp-dir", GRASP_CHAIR,
 CHAIR_4LEG_SINGLE_WIDE = ["--asmdef", ASM_CHAIR, "--grasp-dir", GRASP_CHAIR,
                           "--part-order", CHAIR_PARTS_4LEG] + _LEAN_SINGLE_WIDE
 
+# P1c statistical instance: the same reduced 3-leg chair and the same budget as
+# CHAIR_3LEG_SINGLE, with yaw refinement disabled. The iterated forward baseline
+# runs the beam several times, and yaw refinement -- a post-search step on the
+# already-chosen layout, irrelevant to search order -- dominated wall-clock at
+# ~4500 s/run. All three orders in P1c share this preset, so the comparison stays
+# internally consistent; it is NOT comparable to the yaw-on P1 rows.
+CHAIR_3LEG_SINGLE_NOYAW = ["--asmdef", ASM_CHAIR, "--grasp-dir", GRASP_CHAIR,
+                           "--part-order", CHAIR_PARTS_3LEG] + \
+                          [("0" if p == "20" and _LEAN_SINGLE[i - 1] == "--yaw-step-deg"
+                            else p) for i, p in enumerate(_LEAN_SINGLE)]
+
 # reduced discrete chair instance (P3: exact A* tractable; identical domain for
 # exact vs beam). Lean grasps make each certify ~3x cheaper so a fresh P3 (if
 # desired) finishes far faster; the already-collected P3 result can be reused.
@@ -153,7 +164,7 @@ FIXED_CENTER_SRC = ("single@goal_pos=(0.373,0.0,0.0); predetermined "
 def _spec(priority, variant, task, seed, passthrough,
           order=None, state=None, hall="on", prop="on", mode=None,
           needs_ref=False, l3_check=False, center_source="",
-          l3_grasp_dir="", l3_only="") -> Dict:
+          l3_grasp_dir="", l3_only="", forward_passes=None) -> Dict:
     pt = list(passthrough)
     if mode is not None:
         pt = _override_mode(pt, mode)
@@ -162,7 +173,7 @@ def _spec(priority, variant, task, seed, passthrough,
         "order": order, "state": state, "hall": hall, "prop": prop,
         "passthrough": pt, "needs_ref": needs_ref, "l3_check": l3_check,
         "center_source": center_source, "l3_grasp_dir": l3_grasp_dir,
-        "l3_only": l3_only,
+        "l3_only": l3_only, "forward_passes": forward_passes,
     }
 
 
@@ -229,6 +240,43 @@ def build_p1_matched() -> List[Dict]:
               center_source=FIXED_CENTER_SRC, l3_grasp_dir=GRASP_CHAIR_FULL)
         for order in ("backward", "forward")
     ]
+
+
+def build_p1_dynamic() -> List[Dict]:
+    # P1c: the comparison at EQUAL fidelity. P1/P1b let forward certify against an
+    # emptier scene -- the suffix parts it has not decided yet are simply absent --
+    # so its search cost is not comparable to backward's. "forward_iter" removes
+    # that discount: after its first pass it re-certifies every step against the
+    # suffix staging poses that pass chose, and keeps iterating until the layout
+    # stops changing. All passes are billed to one certification counter.
+    #
+    # Both orders now certify against an occupied staging area, so cost is
+    # comparable and, when the costs tie, so is search time. Backward needs one
+    # pass by construction; whatever forward spends beyond that is the price of
+    # not knowing its suffix. Budget, domain, oracle, grasps, center, seed and
+    # workers are identical to P1b, so the P1b backward row is directly reusable
+    # (it is re-run here anyway, which doubles as a determinism check).
+    # 3-leg statistical cells, seeds 0/1/2, all three orders at one shared preset
+    # (CHAIR_3LEG_SINGLE_NOYAW). This is where P1 reported forward as "24%
+    # cheaper"; that gap was beam occupancy under the relaxed scene, so it is
+    # re-measured here with forward paying for its own suffix estimate.
+    specs = [
+        _spec("p1c", f"eqfid_{order}", "chair_3leg", seed, CHAIR_3LEG_SINGLE_NOYAW,
+              order=order, state="sequential", center_source=FIXED_CENTER_SRC,
+              forward_passes=3 if order == "forward_iter" else None)
+        for seed in SEEDS_STAT
+        for order in ("backward", "forward", "forward_iter")
+    ]
+    # 4-leg headline at the matched wide budget, with the staging_aware L3 verdict
+    # on whatever layout each order commits to.
+    specs += [
+        _spec("p1c", f"eqfid_{order}", "chair_4leg", 0, CHAIR_4LEG_SINGLE_WIDE,
+              order=order, state="sequential", l3_check=True,
+              center_source=FIXED_CENTER_SRC, l3_grasp_dir=GRASP_CHAIR_FULL,
+              forward_passes=3 if order == "forward_iter" else None)
+        for order in ("backward", "forward", "forward_iter")
+    ]
+    return specs
 
 
 def build_p2() -> List[Dict]:
@@ -329,8 +377,8 @@ def build_p5() -> List[Dict]:
     ]
 
 
-BUILDERS = {"p1": build_p1, "p1b": build_p1_matched, "p2": build_p2,
-            "p3": build_p3, "p4": build_p4, "p4l3": build_p4_l3,
+BUILDERS = {"p1": build_p1, "p1b": build_p1_matched, "p1c": build_p1_dynamic,
+            "p2": build_p2, "p3": build_p3, "p4": build_p4, "p4l3": build_p4_l3,
             "p5": build_p5, "scale": build_scale}
 # Focused suite for the deadline: P1 (core), P2 (state model), scale (scalability
 # curve), P4 (cross-assembly). P3 is reused from the prior run; P5 is dropped
@@ -350,6 +398,8 @@ def _run_one_cmd(spec: Dict, ref_cost: Optional[float]) -> List[str]:
            "--out-dir", out_dir, "--csv", CSV_PATH]
     if spec.get("order"):
         cmd += ["--exp-order", spec["order"]]
+    if spec.get("forward_passes"):
+        cmd += ["--exp-forward-passes", str(spec["forward_passes"])]
     if spec.get("state"):
         cmd += ["--exp-state", spec["state"]]
     if spec.get("hall") == "off":
@@ -427,14 +477,16 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--priority", required=True,
-                    choices=["p1", "p1b", "p2", "p3", "p4", "p4l3", "p5", "scale",
-                             "focused", "all"],
+                    choices=["p1", "p1b", "p1c", "p2", "p3", "p4", "p4l3", "p5",
+                             "scale", "focused", "all"],
                     help="focused/all = the deadline suite (p1,p2,scale,p4); p1b is "
-                         "the matched-budget 4-leg headline re-run; p4l3 replays only "
-                         "the staging_aware L3 on layouts P4 already found (no "
-                         "search); p3 is reused from the prior run and p5 is "
-                         "uninformative here. p1b/p4l3/p3/p5 are excluded from the "
-                         "suite but selectable explicitly.")
+                         "the matched-budget 4-leg headline re-run; p1c is the "
+                         "equal-fidelity re-run where forward also certifies against "
+                         "an occupied staging area; p4l3 replays only the "
+                         "staging_aware L3 on layouts P4 already found (no search); "
+                         "p3 is reused from the prior run and p5 is uninformative "
+                         "here. p1b/p1c/p4l3/p3/p5 are excluded from the suite but "
+                         "selectable explicitly.")
     ap.add_argument("--print-only", action="store_true",
                     help="print the exact per-run commands, do not execute.")
     ap.add_argument("--workers", type=int, default=None,
