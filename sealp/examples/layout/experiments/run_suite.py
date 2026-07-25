@@ -20,7 +20,7 @@ Usage:
 
 Output layout:
     sealp/examples/layout/experiments/_output/
-        p1/  p2/  p3/  p4/  p5/            # one JSON per run
+        p1/ p1b/ p2/ p3/ p4/ p5/ scale/    # one JSON per run
         experiments_summary.csv            # appended, never overwritten
 """
 from __future__ import annotations
@@ -68,6 +68,23 @@ _LEAN_SINGLE = [
     "--workers", "16", "--parallel-level", "auto",
 ]
 
+# Matched-budget variant of _LEAN_SINGLE for the 4-leg headline (P1b). The
+# candidate DOMAIN is unchanged (same grid 0.08) -- only the search BUDGET grows
+# (cand-per-part 6->8, beam-width 4->6). Rationale: at beam=4 the backward order
+# certifies against the physically-correct cluttered scene, so more candidates
+# are rejected and the beam can be exhausted, while forward's optimistic scene
+# (undecided suffix parked far away) keeps candidates alive. That is a budget
+# artifact, not an algorithmic difference, so both orders are re-run at the
+# wider budget. Yaw refinement is OFF: it is a post-search step applied to the
+# already-selected layout, the objective is yaw-invariant (see run.py
+# --yaw-step-deg help), and it consumed ~65% of wall-clock in earlier runs.
+_LEAN_SINGLE_WIDE = [
+    "--mode", "beam", "--center-search", "single", "--goal-pos", "0.373,0.0,0.0",
+    "--grid-spacing", "0.08", "--cand-per-part", "8", "--beam-width", "6",
+    "--poses-per-xy", "1", "--yaw-step-deg", "0", "--witness-retries", "3",
+    "--workers", "16", "--parallel-level", "auto",
+]
+
 # P1/P2 reduced statistical instance: seat + 3 picked legs, single fixed center.
 CHAIR_3LEG_SINGLE = ["--asmdef", ASM_CHAIR, "--grasp-dir", GRASP_CHAIR,
                      "--part-order", CHAIR_PARTS_3LEG] + _LEAN_SINGLE
@@ -75,6 +92,11 @@ CHAIR_3LEG_SINGLE = ["--asmdef", ASM_CHAIR, "--grasp-dir", GRASP_CHAIR,
 # P1 headline instance: full 4-leg chair, single fixed center (seed 0 only).
 CHAIR_4LEG_SINGLE = ["--asmdef", ASM_CHAIR, "--grasp-dir", GRASP_CHAIR,
                      "--part-order", CHAIR_PARTS_4LEG] + _LEAN_SINGLE
+
+# P1b matched-budget headline instance: same 4-leg chair and same domain, wider
+# beam/candidate budget, yaw refinement disabled.
+CHAIR_4LEG_SINGLE_WIDE = ["--asmdef", ASM_CHAIR, "--grasp-dir", GRASP_CHAIR,
+                          "--part-order", CHAIR_PARTS_4LEG] + _LEAN_SINGLE_WIDE
 
 # reduced discrete chair instance (P3: exact A* tractable; identical domain for
 # exact vs beam). Lean grasps make each certify ~3x cheaper so a fresh P3 (if
@@ -131,7 +153,7 @@ FIXED_CENTER_SRC = ("single@goal_pos=(0.373,0.0,0.0); predetermined "
 def _spec(priority, variant, task, seed, passthrough,
           order=None, state=None, hall="on", prop="on", mode=None,
           needs_ref=False, l3_check=False, center_source="",
-          l3_grasp_dir="") -> Dict:
+          l3_grasp_dir="", l3_only="") -> Dict:
     pt = list(passthrough)
     if mode is not None:
         pt = _override_mode(pt, mode)
@@ -140,6 +162,7 @@ def _spec(priority, variant, task, seed, passthrough,
         "order": order, "state": state, "hall": hall, "prop": prop,
         "passthrough": pt, "needs_ref": needs_ref, "l3_check": l3_check,
         "center_source": center_source, "l3_grasp_dir": l3_grasp_dir,
+        "l3_only": l3_only,
     }
 
 
@@ -153,10 +176,31 @@ def _override_mode(passthrough: List[str], mode: str) -> List[str]:
     return out
 
 
+def _override_workers(passthrough: List[str], workers: int) -> List[str]:
+    """Rewrite --workers in a passthrough (host-tuning only).
+
+    Worker count changes wall-clock ONLY; oracle_certifications, node_expansions,
+    complete_leaves, cost and layout_fingerprint are worker-invariant. Keep it
+    identical across the cells of one comparison, and do not compare runtime
+    across suites collected with different worker counts / on different hosts.
+    """
+    out = list(passthrough)
+    if "--workers" in out:
+        out[out.index("--workers") + 1] = str(workers)
+    else:
+        out += ["--workers", str(workers)]
+    return out
+
+
 def build_p1() -> List[Dict]:
     # Statistical comparison on the reduced chair (seat + 3 legs), fixed center,
     # seeds 0/1/2, ONLY the search order varies. Plus ONE full 4-leg headline
     # case at seed 0 (backward vs forward).
+    #
+    # LEFT UNCHANGED so the already-collected P1 results stay bit-reproducible.
+    # The 4-leg headline here runs at beam=4/cand=6, where backward exhausts the
+    # beam and fails; that run is kept on record as a documented budget-starvation
+    # case. The matched-budget re-run lives in build_p1_matched (--priority p1b).
     specs = []
     for seed in SEEDS_STAT:
         for order in ("backward", "forward"):
@@ -168,6 +212,23 @@ def build_p1() -> List[Dict]:
                            order=order, state="sequential",
                            center_source=FIXED_CENTER_SRC))
     return specs
+
+
+def build_p1_matched() -> List[Dict]:
+    # P1b: the full 4-leg headline re-run at a MATCHED, wider search budget so
+    # neither order is starved (see _LEAN_SINGLE_WIDE). Everything else -- domain,
+    # oracle, cost model, grasp set, assembly center, seed, workers -- is
+    # identical between the two cells; the search order remains the only variable.
+    # Each run additionally reports the staging_aware full-sequence L3 verdict
+    # against the FULL grasp set, so the layout each order commits to is checked
+    # for soundness under the physically-correct sequential state, not just for
+    # search cost.
+    return [
+        _spec("p1b", f"matched_{order}", "chair_4leg", 0, CHAIR_4LEG_SINGLE_WIDE,
+              order=order, state="sequential", l3_check=True,
+              center_source=FIXED_CENTER_SRC, l3_grasp_dir=GRASP_CHAIR_FULL)
+        for order in ("backward", "forward")
+    ]
 
 
 def build_p2() -> List[Dict]:
@@ -213,6 +274,24 @@ def build_p4() -> List[Dict]:
     ]
 
 
+def build_p4_l3() -> List[Dict]:
+    # Replay ONLY the staging_aware L3 on the layouts P4 has already selected,
+    # reusing each run's original passthrough so the searcher is rebuilt
+    # identically. No search is repeated. Sources that do not exist yet are
+    # skipped, so this is safe to run before the whole of P4 has finished.
+    specs = []
+    for variant, task, pt, grasps in (
+            ("chair", "chair", CHAIR_CROSS, GRASP_CHAIR_FULL),
+            ("tower", "tower", TOWER_CROSS, GRASP_TOWER_FULL)):
+        src = os.path.join(OUT_ROOT, "p4", f"p4_{variant}_{task}_seed0.json")
+        if not os.path.isfile(src):
+            print(f"[p4l3] skip {variant}: no source result at {src}")
+            continue
+        specs.append(_spec("p4l3", variant, task, 0, pt, l3_check=True,
+                           l3_grasp_dir=grasps, l3_only=src))
+    return specs
+
+
 def build_scale() -> List[Dict]:
     # Scalability curve: backward vs forward beam over 1..4 legs (single center,
     # small lean domain, seed 0). Records certifications / node_expansions /
@@ -250,8 +329,9 @@ def build_p5() -> List[Dict]:
     ]
 
 
-BUILDERS = {"p1": build_p1, "p2": build_p2, "p3": build_p3,
-            "p4": build_p4, "p5": build_p5, "scale": build_scale}
+BUILDERS = {"p1": build_p1, "p1b": build_p1_matched, "p2": build_p2,
+            "p3": build_p3, "p4": build_p4, "p4l3": build_p4_l3,
+            "p5": build_p5, "scale": build_scale}
 # Focused suite for the deadline: P1 (core), P2 (state model), scale (scalability
 # curve), P4 (cross-assembly). P3 is reused from the prior run; P5 is dropped
 # (uninformative on the tractable instance). Run p3/p5 explicitly if desired.
@@ -282,6 +362,8 @@ def _run_one_cmd(spec: Dict, ref_cost: Optional[float]) -> List[str]:
         cmd += ["--l3-check", "staging_aware"]
     if spec.get("l3_grasp_dir"):
         cmd += ["--l3-grasp-dir", spec["l3_grasp_dir"]]
+    if spec.get("l3_only"):
+        cmd += ["--l3-only", spec["l3_only"]]
     if spec.get("center_source"):
         cmd += ["--center-source", spec["center_source"]]
     cmd += ["--"] + list(spec["passthrough"])
@@ -345,12 +427,21 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--priority", required=True,
-                    choices=["p1", "p2", "p3", "p4", "p5", "scale", "focused", "all"],
-                    help="focused/all = the deadline suite (p1,p2,scale,p4); p3 is "
-                         "reused from the prior run and p5 is uninformative here, so "
-                         "both are excluded from the suite but selectable explicitly.")
+                    choices=["p1", "p1b", "p2", "p3", "p4", "p4l3", "p5", "scale",
+                             "focused", "all"],
+                    help="focused/all = the deadline suite (p1,p2,scale,p4); p1b is "
+                         "the matched-budget 4-leg headline re-run; p4l3 replays only "
+                         "the staging_aware L3 on layouts P4 already found (no "
+                         "search); p3 is reused from the prior run and p5 is "
+                         "uninformative here. p1b/p4l3/p3/p5 are excluded from the "
+                         "suite but selectable explicitly.")
     ap.add_argument("--print-only", action="store_true",
                     help="print the exact per-run commands, do not execute.")
+    ap.add_argument("--workers", type=int, default=None,
+                    help="override the worker count of every run (host tuning). "
+                         "Each worker is a spawned process that loads WRS + meshes "
+                         "+ grasps independently, so RAM -- not core count -- is "
+                         "usually the binding constraint. Affects wall-clock only.")
     a = ap.parse_args(argv)
 
     if a.priority in ("all", "focused"):
@@ -360,8 +451,15 @@ def main(argv=None) -> int:
     else:
         specs = BUILDERS[a.priority]()
 
+    if a.workers is not None:
+        for s in specs:
+            s["passthrough"] = _override_workers(s["passthrough"], a.workers)
+
     print(f"Suite: {a.priority}  ({len(specs)} runs)  "
           f"{'PRINT-ONLY' if a.print_only else 'SEQUENTIAL EXECUTION'}")
+    if a.workers is not None:
+        print(f"Workers override: {a.workers} (wall-clock only; certification "
+              f"counts and cost are worker-invariant)")
     print(f"Output root : {OUT_ROOT}")
     print(f"Summary CSV : {CSV_PATH}")
     _execute(specs, a.print_only)

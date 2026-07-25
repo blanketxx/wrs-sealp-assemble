@@ -340,9 +340,7 @@ class CollisionChecker(object):
                 robot.cc.cd_pdndp.detachNode()
         # return
         if toggle_contacts:
-            contact_points = [da.pdvec3_to_npvec3(cd_entry.getSurfacePoint(base.render)) for cd_entry in
-                              self.cd_handler.getEntries()]
-            return (collision_result, contact_points)
+            return (collision_result, mph.surface_points(self.cd_handler))
         else:
             return collision_result
 

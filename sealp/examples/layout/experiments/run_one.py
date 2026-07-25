@@ -22,6 +22,15 @@ The variants and how they are realized:
 
   (no exp-* flags) -> native run.main (frozen backward beam or exact A*).
 
+  --l3-only PATH
+      -> no search at all. Loads a previous run's result JSON, replays ONLY the
+         staging_aware full-sequence L3 on the layout it already selected, and
+         appends a CSV row carrying that run's original search metrics together
+         with the fresh L3 verdict. Use it when an L3 check failed for a reason
+         unrelated to the layout (e.g. a crash) so the expensive L2 search does
+         not have to be repeated. The passthrough args must match the original
+         run so the searcher is rebuilt identically.
+
 Everything after ``--`` is passed verbatim to run.main (asmdef, grasp-dir,
 part-order, mode, grid, beam-width, workers, ...). This module injects
 --seed and --output-json; do not pass them in the passthrough.
@@ -225,6 +234,74 @@ def _extract_row(result: Optional[Dict], meta: Dict, ref_cost: Optional[float],
     return row
 
 
+def _run_l3_only(a, passthrough: List[str]) -> int:
+    """Replay ONLY the staging_aware L3 on an already-selected layout.
+
+    The costly part of a run is the L2 search; an L3 verdict lost to a crash or
+    an environment defect should not force it to be redone. The original search
+    metrics are carried over verbatim from the source JSON so the new CSV row
+    stays comparable with the rest of the suite, and the source run is left
+    untouched.
+    """
+    src = os.path.abspath(a.l3_only)
+    if not os.path.isfile(src):
+        print(f"[run_one] --l3-only: no such result JSON: {src}")
+        return 2
+    with open(src, encoding="utf-8") as fh:
+        result = json.load(fh)
+
+    run_id = f"{a.priority}_{a.variant}_{a.task}_seed{a.seed}"
+    out_json = _unique_json_path(a.out_dir, run_id)
+    meta = {
+        "priority": a.priority, "variant": a.variant, "task": a.task, "seed": a.seed,
+        "order": a.exp_order, "state": a.exp_state,
+        "hall_off": False, "prop_off": False, "output_json": out_json,
+    }
+    success = str(result.get("witness_status", "")).endswith("PASS")
+
+    print("=" * 70)
+    print(f"[run_one] {run_id}  (L3-ONLY replay, no search)")
+    print(f"[run_one] source layout : {src}")
+    print(f"[run_one] source cost   : {result.get('objective_cost')}")
+    print("=" * 70)
+
+    if not success:
+        l3 = {"verdict": "NA", "fail_step": "",
+              "fail_reason": "source run has no L2-passing layout"}
+    else:
+        gd = "FULL" if a.l3_grasp_dir else "search"
+        print(f"[run_one] running staging_aware L3 (grasps={gd}) ...")
+        l3 = _staging_aware_l3(passthrough, src, a.seed, a.l3_grasp_dir)
+
+    row = _extract_row(result, meta, a.ref_cost, success, "")
+    row["center_source"] = a.center_source
+    row["l3_staging_aware"] = l3["verdict"]
+    row["l3_fail_step"] = l3["fail_step"]
+    row["l3_fail_reason"] = l3["fail_reason"]
+
+    with open(out_json, "w", encoding="utf-8") as fh:
+        json.dump({
+            "l3_only_replay_of": src,
+            "l3_staging_aware": l3["verdict"],
+            "l3_fail_step": l3["fail_step"],
+            "l3_fail_reason": l3["fail_reason"],
+            "l3_grasp_dir": a.l3_grasp_dir,
+            "source_objective_cost": result.get("objective_cost"),
+            "source_layout_fingerprint": result.get("layout_fingerprint"),
+            "source_assembly_center": result.get("assembly_center"),
+            "source_best_layout": result.get("best_layout"),
+        }, fh, indent=2)
+
+    _append_csv(a.csv, row)
+    print(f"[run_one] staging_aware L3 = {l3['verdict']} "
+          f"(step={l3['fail_step'] or '-'}, reason={l3['fail_reason'] or '-'})")
+    print(f"[run_one] recorded -> {a.csv}")
+    print(f"RUN_ONE_RESULT_JSON={out_json}")
+    print(f"RUN_ONE_COST={result.get('objective_cost', '')}")
+    print(f"RUN_ONE_SUCCESS={int(l3['verdict'] == 'PASS')}")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--priority", required=True)
@@ -248,6 +325,10 @@ def main(argv=None) -> int:
                     help="if set, the staging_aware L3 recheck re-verifies the "
                          "layout against this (FULL) grasp dir for soundness, even "
                          "though search used a lean grasp set.")
+    ap.add_argument("--l3-only", default="",
+                    help="path to a previous run's result JSON. Skips the search "
+                         "entirely and only replays the staging_aware L3 on the "
+                         "layout that run already selected.")
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--csv", required=True)
     ap.add_argument("run_args", nargs=argparse.REMAINDER,
@@ -257,6 +338,9 @@ def main(argv=None) -> int:
     passthrough = list(a.run_args)
     if passthrough and passthrough[0] == "--":
         passthrough = passthrough[1:]
+
+    if a.l3_only:
+        return _run_l3_only(a, passthrough)
 
     run_id = f"{a.priority}_{a.variant}_{a.task}_seed{a.seed}"
     out_json = _unique_json_path(a.out_dir, run_id)
