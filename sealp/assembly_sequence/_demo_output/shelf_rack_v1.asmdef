@@ -1,0 +1,132 @@
+# SEALP Assembly Definition v1.0
+# ShelfRackV1
+
+format_version: '1.0'
+name: ShelfRackV1
+description: 'Four-part shelf rack: two identical full-height side panels with two
+  identical boards between them, one low and one high. Boards slide in along -Y, the
+  right panel closes along -X. Sized for a 60x60 cm work table.'
+models:
+  side_panel_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\ShelfRackV1\model\side_panel.stl
+  board_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\ShelfRackV1\model\board.stl
+parts:
+  side_l:
+    name: Left Side Panel
+    model: side_panel_model
+    mass: 0.09408
+  board_low:
+    name: Lower Board
+    model: board_model
+    mass: 0.073349
+  board_high:
+    name: Upper Board
+    model: board_model
+    mass: 0.073349
+  side_r:
+    name: Right Side Panel
+    model: side_panel_model
+    mass: 0.09408
+assembly:
+- step: 0
+  part: side_l
+  parent: fixture
+  rel_pos:
+  - -0.062
+  - !!float '0'
+  - !!float '0'
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps: []
+  notes: Seated on the fixture; preassembled during layout search. Its two dados face
+    +X.
+- step: 1
+  part: board_low
+  parent: side_l
+  rel_pos:
+  - 0.062
+  - !!float '0'
+  - 0.03
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 0
+  insertion_axis:
+  - !!float '0'
+  - !!float '-1'
+  - !!float '0'
+  notes: Slides HORIZONTALLY along world -Y through the left panel's low dado; needs
+    a clear corridor on the +Y side.
+- step: 2
+  part: board_high
+  parent: side_l
+  rel_pos:
+  - 0.062
+  - !!float '0'
+  - 0.086
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 1
+  insertion_axis:
+  - !!float '0'
+  - !!float '-1'
+  - !!float '0'
+  notes: Slides HORIZONTALLY along world -Y through the left panel's high dado.
+- step: 3
+  part: side_r
+  parent: board_high
+  rel_pos:
+  - 0.062
+  - !!float '0'
+  - -0.086
+  rel_rotmat:
+  - - !!float '-1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '-1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 2
+  insertion_axis:
+  - !!float '-1'
+  - !!float '0'
+  - !!float '0'
+  notes: Same STL yawed 180 deg so its dados face -X. Pushed along world -X until
+    both dados capture both board ends at once.
+symmetry_groups:
+  panels:
+  - side_l
+  - side_r
+  boards:
+  - board_low
+  - board_high

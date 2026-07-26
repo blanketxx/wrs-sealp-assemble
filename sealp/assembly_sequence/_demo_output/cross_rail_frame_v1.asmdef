@@ -1,0 +1,188 @@
+# SEALP Assembly Definition v1.0
+# CrossRailFrameV1
+
+format_version: '1.0'
+name: CrossRailFrameV1
+description: 'Six-part frame: 2 identical posts inserted vertically, 2 identical rails
+  inserted horizontally along +-X, and a cap plate. Sized for a 60x60 cm work table.'
+models:
+  base_plate_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\CrossRailFrameV1\model\base_plate.stl
+  post_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\CrossRailFrameV1\model\post.stl
+  rail_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\CrossRailFrameV1\model\rail.stl
+  cap_plate_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\CrossRailFrameV1\model\cap_plate.stl
+parts:
+  base_plate:
+    name: Base Plate with Post Pockets
+    model: base_plate_model
+    mass: 0.131264
+  post_l:
+    name: Left Post
+    model: post_model
+    mass: 0.027434
+  post_r:
+    name: Right Post
+    model: post_model
+    mass: 0.027434
+  rail_l:
+    name: Left Rail
+    model: rail_model
+    mass: 0.010438
+  rail_r:
+    name: Right Rail
+    model: rail_model
+    mass: 0.010438
+  cap_plate:
+    name: Cap Plate
+    model: cap_plate_model
+    mass: 0.059842
+assembly:
+- step: 0
+  part: base_plate
+  parent: fixture
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - !!float '0'
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps: []
+  notes: Seated on the fixture; treated as preassembled in layout search.
+- step: 1
+  part: post_l
+  parent: base_plate
+  rel_pos:
+  - -0.042
+  - !!float '0'
+  - 0.006
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 0
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Drops into the left base pocket along world -Z.
+- step: 2
+  part: post_r
+  parent: base_plate
+  rel_pos:
+  - 0.042
+  - !!float '0'
+  - 0.006
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 1
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Drops into the right base pocket along world -Z.
+- step: 3
+  part: rail_l
+  parent: post_l
+  rel_pos:
+  - -0.03
+  - !!float '0'
+  - 0.041
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 2
+  insertion_axis:
+  - !!float '1'
+  - !!float '0'
+  - !!float '0'
+  notes: Pushed HORIZONTALLY along world +X into the left post slot.
+- step: 4
+  part: rail_r
+  parent: post_r
+  rel_pos:
+  - 0.03
+  - !!float '0'
+  - 0.041
+  rel_rotmat:
+  - - !!float '-1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '-1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 3
+  insertion_axis:
+  - !!float '-1'
+  - !!float '0'
+  - !!float '0'
+  notes: Same STL yawed 180 deg, pushed along world -X into the right post.
+- step: 5
+  part: cap_plate
+  parent: base_plate
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.07
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 4
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Lowered onto both post tops along world -Z.
+symmetry_groups:
+  posts:
+  - post_l
+  - post_r
+  rails:
+  - rail_l
+  - rail_r

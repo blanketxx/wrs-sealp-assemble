@@ -1,0 +1,186 @@
+# SEALP Assembly Definition v1.0
+# ModularFixtureStackV1
+
+format_version: '1.0'
+name: ModularFixtureStackV1
+description: 'Six-part low-profile modular fixture stack: broad base, lower fixture,
+  locating spacer, upper fixture, transverse clamp bridge, and top pressure cap. All
+  insertions are vertical.'
+models:
+  base_plate_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\Modular Fixture Stack\model\base_plate.stl
+  lower_fixture_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\Modular Fixture Stack\model\lower_fixture.stl
+  spacer_plate_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\Modular Fixture Stack\model\spacer_plate.stl
+  upper_fixture_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\Modular Fixture Stack\model\upper_fixture.stl
+  clamp_bridge_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\Modular Fixture Stack\model\clamp_bridge.stl
+  top_cap_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\Modular Fixture Stack\model\top_cap.stl
+parts:
+  base_plate:
+    name: Fixture Base Plate
+    model: base_plate_model
+    mass: 0.1876
+  lower_fixture:
+    name: Lower Fixture Module
+    model: lower_fixture_model
+    mass: 0.190142
+  spacer_plate:
+    name: Locating Spacer Plate
+    model: spacer_plate_model
+    mass: 0.063157
+  upper_fixture:
+    name: Upper Fixture Module
+    model: upper_fixture_model
+    mass: 0.090294
+  clamp_bridge:
+    name: Transverse Clamp Bridge
+    model: clamp_bridge_model
+    mass: 0.024973
+  top_cap:
+    name: Top Pressure Cap
+    model: top_cap_model
+    mass: 0.011144
+assembly:
+- step: 0
+  part: base_plate
+  parent: fixture
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - !!float '0'
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps: []
+  notes: Broad base plate; treated as preassembled during layout search.
+- step: 1
+  part: lower_fixture
+  parent: base_plate
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.01
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 0
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Drops into the large base locating pocket along world -Z.
+- step: 2
+  part: spacer_plate
+  parent: lower_fixture
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.024
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 1
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Thin locating plate stacked into the lower fixture pocket.
+- step: 3
+  part: upper_fixture
+  parent: spacer_plate
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.009
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 2
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Keyed upper block seated into the spacer plate.
+- step: 4
+  part: clamp_bridge
+  parent: upper_fixture
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.02
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 3
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Wide clamp bridge lowered into the narrow upper-fixture seat.
+- step: 5
+  part: top_cap
+  parent: clamp_bridge
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.01
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 4
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Final pressure cap inserted into the bridge socket.

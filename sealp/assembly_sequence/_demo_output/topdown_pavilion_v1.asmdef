@@ -1,0 +1,205 @@
+# SEALP Assembly Definition v1.0
+# TopDownPavilionV1
+
+format_version: '1.0'
+name: TopDownPavilionV1
+description: TopDownPavilionV1 is a four-post miniature pavilion appearance kit for
+  cross-part generalization tests. Assembly topology, part ids, order, relative poses
+  and socket dimensions remain aligned with TopDownTower. Each post uses its own STL
+  file for independent replacement experiments.
+models:
+  base_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\TopDownPavilionV1\model\base_plate.stl
+  post_bl_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\TopDownPavilionV1\model\post_bl.stl
+  post_fl_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\TopDownPavilionV1\model\post_fl.stl
+  post_br_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\TopDownPavilionV1\model\post_br.stl
+  post_fr_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\TopDownPavilionV1\model\post_fr.stl
+  middle_plate_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\TopDownPavilionV1\model\middle_plate.stl
+  top_cross_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\TopDownPavilionV1\model\top_cross.stl
+parts:
+  base_plate:
+    name: Octagonal Base Plate with Post Pockets
+    model: base_model
+    mass: 0.189844
+  post_bl:
+    name: Back-Left Pavilion Post
+    model: post_bl_model
+    mass: 0.0675
+  post_fl:
+    name: Front-Left Pavilion Post
+    model: post_fl_model
+    mass: 0.0675
+  post_br:
+    name: Back-Right Pavilion Post
+    model: post_br_model
+    mass: 0.0675
+  post_fr:
+    name: Front-Right Pavilion Post
+    model: post_fr_model
+    mass: 0.0675
+  middle_plate:
+    name: Upper Pavilion Platform
+    model: middle_plate_model
+    mass: 0.135
+  top_cross:
+    name: Arched Pavilion Top Beam
+    model: top_cross_model
+    mass: 0.050625
+assembly:
+- step: 0
+  part: base_plate
+  parent: fixture
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - !!float '0'
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps: []
+  notes: Place base_plate on fixture. Its real bottom touches fixture z=0. This part
+    can be treated as preassembled in layout search.
+- step: 1
+  part: post_br
+  parent: base_plate
+  rel_pos:
+  - 0.06375
+  - 0.04875
+  - 0.01215
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 0
+  notes: Insert post_br into the matching square pocket. post_bottom_rel=0.012150,
+    base_socket_depth=0.012150.
+- step: 2
+  part: post_fr
+  parent: base_plate
+  rel_pos:
+  - 0.06375
+  - -0.04875
+  - 0.01215
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 1
+  notes: Insert post_fr into the matching square pocket. post_bottom_rel=0.012150,
+    base_socket_depth=0.012150.
+- step: 3
+  part: post_bl
+  parent: base_plate
+  rel_pos:
+  - -0.06375
+  - 0.04875
+  - 0.01215
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 2
+  notes: Insert post_bl into the matching square pocket. post_bottom_rel=0.012150,
+    base_socket_depth=0.012150.
+- step: 4
+  part: post_fl
+  parent: base_plate
+  rel_pos:
+  - -0.06375
+  - -0.04875
+  - 0.01215
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 3
+  notes: Insert post_fl into the matching square pocket. post_bottom_rel=0.012150,
+    base_socket_depth=0.012150.
+- step: 5
+  part: middle_plate
+  parent: base_plate
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.14715
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 4
+  notes: Place middle_plate on top of all four posts.
+- step: 6
+  part: top_cross
+  parent: base_plate
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.15795
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 5
+  notes: Insert arched top_cross into middle_plate center square socket. cross_bottom_rel=0.157950,
+    middle_socket_depth=0.010800.
+symmetry_groups:
+  posts:
+  - post_bl
+  - post_fl
+  - post_br
+  - post_fr

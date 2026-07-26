@@ -1,0 +1,194 @@
+# SEALP Assembly Definition v1.0
+# Totem
+
+format_version: '1.0'
+name: Totem
+description: Totem is a furniture side-table appearance kit for cross-part generalization
+  tests. Parts read as plinth base, tapered legs, fixed middle shelf and wide tabletop
+  (not a tower). Assembly topology, part ids, order, relative poses and socket dimensions
+  remain aligned with TopDownTower.
+models:
+  base_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\Totem\model\base_plate.stl
+  post_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\Totem\model\post.stl
+  middle_plate_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\Totem\model\middle_plate.stl
+  top_cross_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\Totem\model\top_cross.stl
+parts:
+  base_plate:
+    name: Plinth Base Panel
+    model: base_model
+    mass: 0.189844
+  post_bl:
+    name: Back-Left Tapered Leg
+    model: post_model
+    mass: 0.0675
+  post_fl:
+    name: Front-Left Tapered Leg
+    model: post_model
+    mass: 0.0675
+  post_br:
+    name: Back-Right Tapered Leg
+    model: post_model
+    mass: 0.0675
+  post_fr:
+    name: Front-Right Tapered Leg
+    model: post_model
+    mass: 0.0675
+  middle_plate:
+    name: Fixed Middle Shelf
+    model: middle_plate_model
+    mass: 0.135
+  top_cross:
+    name: Wide Tabletop
+    model: top_cross_model
+    mass: 0.050625
+assembly:
+- step: 0
+  part: base_plate
+  parent: fixture
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - !!float '0'
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps: []
+  notes: Plinth base on fixture. Bottom at z=0. Preassembled in layout search.
+- step: 1
+  part: post_br
+  parent: base_plate
+  rel_pos:
+  - 0.06375
+  - 0.04875
+  - 0.01215
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 0
+  notes: Insert tapered leg into rear-right socket. leg_bottom_rel=0.012150.
+- step: 2
+  part: post_fr
+  parent: base_plate
+  rel_pos:
+  - 0.06375
+  - -0.04875
+  - 0.01215
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 1
+  notes: Insert tapered leg into front-right socket. leg_bottom_rel=0.012150.
+- step: 3
+  part: post_bl
+  parent: base_plate
+  rel_pos:
+  - -0.06375
+  - 0.04875
+  - 0.01215
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 2
+  notes: Insert tapered leg into rear-left socket. leg_bottom_rel=0.012150.
+- step: 4
+  part: post_fl
+  parent: base_plate
+  rel_pos:
+  - -0.06375
+  - -0.04875
+  - 0.01215
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 3
+  notes: Insert tapered leg into front-left socket. leg_bottom_rel=0.012150.
+- step: 5
+  part: middle_plate
+  parent: base_plate
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.14715
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 4
+  notes: Mount fixed middle shelf onto the four leg tops.
+- step: 6
+  part: top_cross
+  parent: base_plate
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.15795
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 5
+  notes: Seat wide tabletop peg into middle-shelf center socket.
+    tabletop_bottom_rel=0.157950, shelf_socket_depth=0.010800.
+symmetry_groups:
+  posts:
+  - post_bl
+  - post_fl
+  - post_br
+  - post_fr

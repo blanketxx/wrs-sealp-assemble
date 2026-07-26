@@ -1,0 +1,246 @@
+# SEALP Assembly Definition v1.0
+# RadialHubV1
+
+format_version: '1.0'
+name: RadialHubV1
+description: 'Eight-part hub: 4 identical spokes driven radially inward along +X/-X/+Y/-Y
+  plus vertical hub, collar and cap. Sized for a 60x60 cm work table.'
+models:
+  base_plate_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\RadialHubV1\model\base_plate.stl
+  hub_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\RadialHubV1\model\hub.stl
+  spoke_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\RadialHubV1\model\spoke.stl
+  collar_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\RadialHubV1\model\collar.stl
+  cap_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\RadialHubV1\model\cap.stl
+parts:
+  base_plate:
+    name: Base Plate with Hub Socket
+    model: base_plate_model
+    mass: 0.148932
+  hub:
+    name: Central Hub
+    model: hub_model
+    mass: 0.059584
+  collar:
+    name: Collar
+    model: collar_model
+    mass: 0.016128
+  spoke_px:
+    name: Spoke driven along +X
+    model: spoke_model
+    mass: 0.005701
+  spoke_nx:
+    name: Spoke driven along -X
+    model: spoke_model
+    mass: 0.005701
+  spoke_py:
+    name: Spoke driven along +Y
+    model: spoke_model
+    mass: 0.005701
+  spoke_ny:
+    name: Spoke driven along -Y
+    model: spoke_model
+    mass: 0.005701
+  cap:
+    name: Hub Cap
+    model: cap_model
+    mass: 0.011074
+assembly:
+- step: 0
+  part: base_plate
+  parent: fixture
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - !!float '0'
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps: []
+  notes: Seated on the fixture; preassembled during layout search.
+- step: 1
+  part: hub
+  parent: base_plate
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.006
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 0
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Drops into the base socket along world -Z.
+- step: 2
+  part: collar
+  parent: base_plate
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.016
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 1
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Slides down over the hub before any spoke is fitted.
+- step: 3
+  part: spoke_px
+  parent: hub
+  rel_pos:
+  - -0.03
+  - !!float '0'
+  - 0.028
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 2
+  insertion_axis:
+  - !!float '1'
+  - !!float '0'
+  - !!float '0'
+  notes: Enters the low X slot travelling along world +X.
+- step: 4
+  part: spoke_nx
+  parent: hub
+  rel_pos:
+  - 0.03
+  - !!float '0'
+  - 0.028
+  rel_rotmat:
+  - - !!float '-1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '-1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 3
+  insertion_axis:
+  - !!float '-1'
+  - !!float '0'
+  - !!float '0'
+  notes: Same STL yawed 180 deg, enters the low X slot along world -X.
+- step: 5
+  part: spoke_py
+  parent: hub
+  rel_pos:
+  - !!float '0'
+  - -0.03
+  - 0.048
+  rel_rotmat:
+  - - !!float '0'
+    - !!float '-1'
+    - !!float '0'
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 4
+  insertion_axis:
+  - !!float '0'
+  - !!float '1'
+  - !!float '0'
+  notes: Same STL yawed 90 deg, enters the high Y slot along world +Y.
+- step: 6
+  part: spoke_ny
+  parent: hub
+  rel_pos:
+  - !!float '0'
+  - 0.03
+  - 0.048
+  rel_rotmat:
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '-1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 5
+  insertion_axis:
+  - !!float '0'
+  - !!float '-1'
+  - !!float '0'
+  notes: Same STL yawed 270 deg, enters the high Y slot along world -Y.
+- step: 7
+  part: cap
+  parent: base_plate
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.073
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 6
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Lowered onto the hub top along world -Z.
+symmetry_groups:
+  spokes_x:
+  - spoke_px
+  - spoke_nx
+  spokes_y:
+  - spoke_py
+  - spoke_ny

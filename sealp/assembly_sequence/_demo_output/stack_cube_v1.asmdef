@@ -1,0 +1,305 @@
+# SEALP Assembly Definition v1.0
+# StackCubeV1
+
+format_version: '1.0'
+name: StackCubeV1
+description: 'Ten-part compact stack: 4 identical corner posts and 4 identical clips
+  that lock the mid plate from all four sides. Deliberately small so ten parts still
+  stage on a 60x60 cm work table.'
+models:
+  base_plate_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\StackCubeV1\model\base_plate.stl
+  post_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\StackCubeV1\model\post.stl
+  mid_plate_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\StackCubeV1\model\mid_plate.stl
+  clip_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\StackCubeV1\model\clip.stl
+parts:
+  base_plate:
+    name: Base Plate with Four Corner Pockets
+    model: base_plate_model
+    mass: 0.101545
+  post_bl:
+    name: Corner Post -X/-Y
+    model: post_model
+    mass: 0.015109
+  post_br:
+    name: Corner Post +X/-Y
+    model: post_model
+    mass: 0.015109
+  post_fl:
+    name: Corner Post -X/+Y
+    model: post_model
+    mass: 0.015109
+  post_fr:
+    name: Corner Post +X/+Y
+    model: post_model
+    mass: 0.015109
+  mid_plate:
+    name: Mid Plate
+    model: mid_plate_model
+    mass: 0.08988
+  clip_nx:
+    name: Clip driven along -X
+    model: clip_model
+    mass: 0.002463
+  clip_px:
+    name: Clip driven along +X
+    model: clip_model
+    mass: 0.002463
+  clip_ny:
+    name: Clip driven along -Y
+    model: clip_model
+    mass: 0.002463
+  clip_py:
+    name: Clip driven along +Y
+    model: clip_model
+    mass: 0.002463
+assembly:
+- step: 0
+  part: base_plate
+  parent: fixture
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - !!float '0'
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps: []
+  notes: Seated on the fixture; preassembled during layout search.
+- step: 1
+  part: post_bl
+  parent: base_plate
+  rel_pos:
+  - -0.038
+  - -0.038
+  - 0.005
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 0
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Drops into the -X/-Y base pocket along world -Z.
+- step: 2
+  part: post_br
+  parent: base_plate
+  rel_pos:
+  - 0.038
+  - -0.038
+  - 0.005
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 1
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Drops into the +X/-Y base pocket along world -Z.
+- step: 3
+  part: post_fl
+  parent: base_plate
+  rel_pos:
+  - -0.038
+  - 0.038
+  - 0.005
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 2
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Drops into the -X/+Y base pocket along world -Z.
+- step: 4
+  part: post_fr
+  parent: base_plate
+  rel_pos:
+  - 0.038
+  - 0.038
+  - 0.005
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 3
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Drops into the +X/+Y base pocket along world -Z.
+- step: 5
+  part: mid_plate
+  parent: base_plate
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.049
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 4
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Lowered onto all four post tops along world -Z.
+- step: 6
+  part: clip_nx
+  parent: mid_plate
+  rel_pos:
+  - 0.0625
+  - !!float '0'
+  - 0.003
+  rel_rotmat:
+  - - !!float '-1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '-1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 5
+  insertion_axis:
+  - !!float '-1'
+  - !!float '0'
+  - !!float '0'
+  notes: Enters the +X face slot travelling along world -X.
+- step: 7
+  part: clip_px
+  parent: mid_plate
+  rel_pos:
+  - -0.0625
+  - !!float '0'
+  - 0.003
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 6
+  insertion_axis:
+  - !!float '1'
+  - !!float '0'
+  - !!float '0'
+  notes: Same STL at yaw 0, enters the -X face slot along world +X.
+- step: 8
+  part: clip_ny
+  parent: mid_plate
+  rel_pos:
+  - !!float '0'
+  - 0.0625
+  - 0.003
+  rel_rotmat:
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '-1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 7
+  insertion_axis:
+  - !!float '0'
+  - !!float '-1'
+  - !!float '0'
+  notes: Same STL yawed 270 deg, enters the +Y face slot along world -Y.
+- step: 9
+  part: clip_py
+  parent: mid_plate
+  rel_pos:
+  - !!float '0'
+  - -0.0625
+  - 0.003
+  rel_rotmat:
+  - - !!float '0'
+    - !!float '-1'
+    - !!float '0'
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 8
+  insertion_axis:
+  - !!float '0'
+  - !!float '1'
+  - !!float '0'
+  notes: Same STL yawed 90 deg, enters the -Y face slot along world +Y.
+symmetry_groups:
+  posts:
+  - post_bl
+  - post_br
+  - post_fl
+  - post_fr
+  clips:
+  - clip_nx
+  - clip_px
+  - clip_ny
+  - clip_py

@@ -1,0 +1,10 @@
+{
+  "assembly": "CrossRailFrameV1",
+  "note": "Extra mating contacts per step, excluding the step's parent_id which the searcher already exempts. Seed into _contact_excl_map_cache.",
+  "contact_exclusion_map": {
+    "cap_plate": [
+      "post_l",
+      "post_r"
+    ]
+  }
+}

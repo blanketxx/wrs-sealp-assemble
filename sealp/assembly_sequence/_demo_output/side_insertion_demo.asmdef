@@ -1,0 +1,73 @@
+# SEALP Assembly Definition v1.0
+# Minimal SIDE-INSERTION validation case.
+#
+# Same seat + one leg as YuanChair (so meshes/grasps resolve), but the leg step
+# carries an EXPLICIT horizontal insertion axis expressed DIRECTLY in the WORLD
+# frame (no object-frame transform):
+#     insertion_axis: [1, 0, 0]   (world +X)
+# => place-approach = [ 1, 0, 0]  (insert horizontally along world +X)
+#    place-depart   = [-1, 0, 0]  (retract along world -X)
+# This exercises the priority: explicit world insertion_axis > legacy
+# insertion_axis_local > inferred +Z > -Z.
+
+format_version: '1.0'
+name: SideInsertionDemo
+description: 'Minimal horizontal-insertion validation: 1 seat + 1 leg (explicit axis)'
+models:
+  seat_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\yuanchair\yuanchair-part1.stl
+  leg_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\yuanchair\yuanchair-part2.stl
+parts:
+  seat:
+    name: Seat
+    model: seat_model
+    mass: 1.5
+  leg_bl:
+    name: Back-Left Leg
+    model: leg_model
+    mass: 0.3
+assembly:
+- step: 0
+  part: seat
+  parent: fixture
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - !!float '0'
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps: []
+  notes: Place the seat at the assembly station.
+- step: 1
+  part: leg_bl
+  parent: seat
+  rel_pos:
+  - 0.07
+  - 0.07
+  - 0.02
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  insertion_axis:
+  - 1.0
+  - 0.0
+  - 0.0
+  deps:
+  - 0
+  notes: Insert the leg HORIZONTALLY along world +X into the seat -- explicit world insertion axis.

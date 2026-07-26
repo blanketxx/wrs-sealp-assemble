@@ -1,0 +1,277 @@
+# SEALP Assembly Definition v1.0
+# SlantBraceV1
+
+format_version: '1.0'
+name: SlantBraceV1
+description: 'Nine-part braced frame: 4 identical L-braces seated along four different
+  45-degree diagonals, plus vertical columns, deck and pin. Sized for a 60x60 cm work
+  table.'
+models:
+  base_plate_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\SlantBraceV1\model\base_plate.stl
+  column_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\SlantBraceV1\model\column.stl
+  brace_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\SlantBraceV1\model\brace.stl
+  deck_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\SlantBraceV1\model\deck.stl
+  pin_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\SlantBraceV1\model\pin.stl
+parts:
+  base_plate:
+    name: Base Plate with Column Sockets
+    model: base_plate_model
+    mass: 0.202216
+  column_l:
+    name: Left Column
+    model: column_model
+    mass: 0.036019
+  column_r:
+    name: Right Column
+    model: column_model
+    mass: 0.036019
+  brace_px:
+    name: Brace on the -X face of the left column
+    model: brace_model
+    mass: 0.006552
+  brace_my:
+    name: Brace on the +Y face of the left column
+    model: brace_model
+    mass: 0.006552
+  brace_mx:
+    name: Brace on the +X face of the right column
+    model: brace_model
+    mass: 0.006552
+  brace_py:
+    name: Brace on the -Y face of the right column
+    model: brace_model
+    mass: 0.006552
+  deck:
+    name: Deck Plate
+    model: deck_model
+    mass: 0.154426
+  pin:
+    name: Locating Pin
+    model: pin_model
+    mass: 0.004301
+assembly:
+- step: 0
+  part: base_plate
+  parent: fixture
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - !!float '0'
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps: []
+  notes: Seated on the fixture; preassembled during layout search.
+- step: 1
+  part: column_l
+  parent: base_plate
+  rel_pos:
+  - -0.045
+  - !!float '0'
+  - 0.006
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 0
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Drops into the -X base socket along world -Z.
+- step: 2
+  part: column_r
+  parent: base_plate
+  rel_pos:
+  - 0.045
+  - !!float '0'
+  - 0.006
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 1
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Drops into the +X base socket along world -Z.
+- step: 3
+  part: brace_px
+  parent: column_l
+  rel_pos:
+  - -0.029
+  - !!float '0'
+  - 0.01
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 2
+  insertion_axis:
+  - 0.707107
+  - !!float '0'
+  - -0.707107
+  notes: 'DIAGONAL insert: advances along +X while descending along -Z (45 deg).'
+- step: 4
+  part: brace_my
+  parent: column_l
+  rel_pos:
+  - !!float '0'
+  - 0.029
+  - 0.01
+  rel_rotmat:
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '-1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 3
+  insertion_axis:
+  - !!float '0'
+  - -0.707107
+  - -0.707107
+  notes: 'DIAGONAL insert: advances along -Y while descending along -Z.'
+- step: 5
+  part: brace_mx
+  parent: column_r
+  rel_pos:
+  - 0.029
+  - !!float '0'
+  - 0.01
+  rel_rotmat:
+  - - !!float '-1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '-1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 4
+  insertion_axis:
+  - -0.707107
+  - !!float '0'
+  - -0.707107
+  notes: 'DIAGONAL insert: advances along -X while descending along -Z.'
+- step: 6
+  part: brace_py
+  parent: column_r
+  rel_pos:
+  - !!float '0'
+  - -0.029
+  - 0.01
+  rel_rotmat:
+  - - !!float '0'
+    - !!float '-1'
+    - !!float '0'
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 5
+  insertion_axis:
+  - !!float '0'
+  - 0.707107
+  - -0.707107
+  notes: 'DIAGONAL insert: advances along +Y while descending along -Z.'
+- step: 7
+  part: deck
+  parent: base_plate
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.08
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 6
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Lowered onto both column tops along world -Z.
+- step: 8
+  part: pin
+  parent: deck
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.004
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 7
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Dropped into the deck's centre bore along world -Z.
+symmetry_groups:
+  columns:
+  - column_l
+  - column_r
+  braces:
+  - brace_px
+  - brace_my
+  - brace_mx
+  - brace_py

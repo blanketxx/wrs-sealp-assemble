@@ -1,0 +1,220 @@
+# SEALP Assembly Definition v1.0
+# SlotTrayV1
+
+format_version: '1.0'
+name: SlotTrayV1
+description: 'Seven-part tray: 2 identical uprights inserted vertically, 2 identical
+  side panels inserted along +-Y, a drawer pushed along -X, and a lid. Sized for a
+  60x60 cm work table.'
+models:
+  tray_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\SlotTrayV1\model\tray.stl
+  upright_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\SlotTrayV1\model\upright.stl
+  side_panel_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\SlotTrayV1\model\side_panel.stl
+  drawer_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\SlotTrayV1\model\drawer.stl
+  lid_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\SlotTrayV1\model\lid.stl
+parts:
+  tray:
+    name: Tray with Drawer Cavity
+    model: tray_model
+    mass: 0.15162
+  upright_l:
+    name: Left Upright
+    model: upright_model
+    mass: 0.024752
+  upright_r:
+    name: Right Upright
+    model: upright_model
+    mass: 0.024752
+  panel_l:
+    name: Left Side Panel
+    model: side_panel_model
+    mass: 0.019118
+  panel_r:
+    name: Right Side Panel
+    model: side_panel_model
+    mass: 0.019118
+  drawer:
+    name: Drawer
+    model: drawer_model
+    mass: 0.028818
+  lid:
+    name: Lid
+    model: lid_model
+    mass: 0.103068
+assembly:
+- step: 0
+  part: tray
+  parent: fixture
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - !!float '0'
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps: []
+  notes: Seated on the fixture; preassembled during layout search.
+- step: 1
+  part: upright_l
+  parent: tray
+  rel_pos:
+  - -0.048
+  - 0.034
+  - 0.007
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 0
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Drops into the +Y tray pocket along world -Z.
+- step: 2
+  part: upright_r
+  parent: tray
+  rel_pos:
+  - -0.048
+  - -0.034
+  - 0.007
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 1
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Drops into the -Y tray pocket along world -Z.
+- step: 3
+  part: panel_l
+  parent: upright_l
+  rel_pos:
+  - !!float '0'
+  - 0.0275
+  - 0.036
+  rel_rotmat:
+  - - !!float '-1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '-1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 2
+  insertion_axis:
+  - !!float '0'
+  - !!float '-1'
+  - !!float '0'
+  notes: Slides HORIZONTALLY along world -Y into the left upright slot.
+- step: 4
+  part: panel_r
+  parent: upright_r
+  rel_pos:
+  - !!float '0'
+  - -0.0275
+  - 0.036
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 3
+  insertion_axis:
+  - !!float '0'
+  - !!float '1'
+  - !!float '0'
+  notes: Same STL at yaw 0, slides along world +Y into the right upright.
+- step: 5
+  part: drawer
+  parent: tray
+  rel_pos:
+  - 0.046
+  - !!float '0'
+  - 0.009
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 4
+  insertion_axis:
+  - !!float '-1'
+  - !!float '0'
+  - !!float '0'
+  notes: Pushed along world -X into the tray cavity; needs a clear corridor in front
+    of the tray's +X face.
+- step: 6
+  part: lid
+  parent: tray
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.067
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 5
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Lowered onto both upright tops along world -Z.
+symmetry_groups:
+  uprights:
+  - upright_l
+  - upright_r
+  panels:
+  - panel_l
+  - panel_r

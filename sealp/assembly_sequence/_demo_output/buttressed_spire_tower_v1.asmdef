@@ -1,0 +1,307 @@
+# SEALP Assembly Definition v1.0
+# ButtressedSpireTowerV1
+
+format_version: '1.0'
+name: ButtressedSpireTowerV1
+description: Ten-step irregular tower benchmark with a cruciform base, stepped core,
+  four asymmetric buttresses, two horizontal T-shaped wings, a cross crown, and a
+  stepped spire.
+models:
+  cruciform_base_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\Buttressed Spire Tower\model\cruciform_base.stl
+  stepped_core_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\Buttressed Spire Tower\model\stepped_core.stl
+  buttress_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\Buttressed Spire Tower\model\buttress.stl
+  wing_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\Buttressed Spire Tower\model\wing.stl
+  crown_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\Buttressed Spire Tower\model\crown.stl
+  spire_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\Buttressed Spire Tower\model\spire.stl
+parts:
+  cruciform_base:
+    name: Cruciform Base Plinth
+    model: cruciform_base_model
+    mass: 0.191478
+  stepped_core:
+    name: Stepped Tower Core
+    model: stepped_core_model
+    mass: 0.118188
+  buttress_w:
+    name: West Buttress
+    model: buttress_model
+    mass: 0.036613
+  buttress_e:
+    name: East Buttress
+    model: buttress_model
+    mass: 0.036613
+  buttress_s:
+    name: South Buttress
+    model: buttress_model
+    mass: 0.036613
+  buttress_n:
+    name: North Buttress
+    model: buttress_model
+    mass: 0.036613
+  wing_w:
+    name: West Horizontal Wing
+    model: wing_model
+    mass: 0.019303
+  wing_e:
+    name: East Horizontal Wing
+    model: wing_model
+    mass: 0.019303
+  crown:
+    name: Cross Crown
+    model: crown_model
+    mass: 0.061505
+  spire:
+    name: Stepped Spire
+    model: spire_model
+    mass: 0.008211
+assembly:
+- step: 0
+  part: cruciform_base
+  parent: fixture
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - !!float '0'
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps: []
+  notes: Cross-shaped base treated as preassembled.
+- step: 1
+  part: stepped_core
+  parent: cruciform_base
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.006
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 0
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Central tapered-looking core inserted vertically.
+- step: 2
+  part: buttress_w
+  parent: cruciform_base
+  rel_pos:
+  - -0.048
+  - !!float '0'
+  - 0.007
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 1
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Asymmetric buttress seated in the west socket.
+- step: 3
+  part: buttress_e
+  parent: cruciform_base
+  rel_pos:
+  - 0.048
+  - !!float '0'
+  - 0.007
+  rel_rotmat:
+  - - !!float '-1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '-1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 2
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Same STL rotated 180 deg.
+- step: 4
+  part: buttress_s
+  parent: cruciform_base
+  rel_pos:
+  - !!float '0'
+  - -0.048
+  - 0.007
+  rel_rotmat:
+  - - !!float '0'
+    - !!float '-1'
+    - !!float '0'
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 3
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Same STL rotated 90 deg.
+- step: 5
+  part: buttress_n
+  parent: cruciform_base
+  rel_pos:
+  - !!float '0'
+  - 0.048
+  - 0.007
+  rel_rotmat:
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '-1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 4
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Same STL rotated 270 deg.
+- step: 6
+  part: wing_w
+  parent: stepped_core
+  rel_pos:
+  - -0.029
+  - !!float '0'
+  - 0.081
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 5
+  insertion_axis:
+  - !!float '1'
+  - !!float '0'
+  - !!float '0'
+  notes: T-shaped wing pushed horizontally along world +X.
+- step: 7
+  part: wing_e
+  parent: stepped_core
+  rel_pos:
+  - 0.029
+  - !!float '0'
+  - 0.081
+  rel_rotmat:
+  - - !!float '-1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '-1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 6
+  insertion_axis:
+  - !!float '-1'
+  - !!float '0'
+  - !!float '0'
+  notes: Same STL yawed 180 deg and pushed along world -X.
+- step: 8
+  part: crown
+  parent: stepped_core
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.117
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 7
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Cross-shaped crown lowered over the upper core.
+- step: 9
+  part: spire
+  parent: crown
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.006
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 8
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Final tapered spire inserted into the crown socket.
+symmetry_groups:
+  buttresses:
+  - buttress_w
+  - buttress_e
+  - buttress_s
+  - buttress_n
+  wings:
+  - wing_w
+  - wing_e

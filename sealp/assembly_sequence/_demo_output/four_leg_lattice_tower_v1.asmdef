@@ -1,0 +1,245 @@
+# SEALP Assembly Definition v1.0
+# FourLegLatticeTowerV1
+
+format_version: '1.0'
+name: FourLegLatticeTowerV1
+description: 'Eight-step simplified four-leg lattice-tower benchmark: base frame,
+  four identical stepped legs, mid deck, top deck, and a central tapered mast.'
+models:
+  base_frame_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\Four-Leg Lattice Tower\model\base_frame.stl
+  tower_leg_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\Four-Leg Lattice Tower\model\tower_leg.stl
+  mid_deck_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\Four-Leg Lattice Tower\model\mid_deck.stl
+  top_deck_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\Four-Leg Lattice Tower\model\top_deck.stl
+  mast_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\Four-Leg Lattice Tower\model\mast.stl
+parts:
+  base_frame:
+    name: Lattice Tower Base
+    model: base_frame_model
+    mass: 0.2268
+  leg_fl:
+    name: Front-Left Tower Leg
+    model: tower_leg_model
+    mass: 0.03059
+  leg_bl:
+    name: Back-Left Tower Leg
+    model: tower_leg_model
+    mass: 0.03059
+  leg_fr:
+    name: Front-Right Tower Leg
+    model: tower_leg_model
+    mass: 0.03059
+  leg_br:
+    name: Back-Right Tower Leg
+    model: tower_leg_model
+    mass: 0.03059
+  mid_deck:
+    name: Mid Lattice Deck
+    model: mid_deck_model
+    mass: 0.087885
+  top_deck:
+    name: Top Deck
+    model: top_deck_model
+    mass: 0.086562
+  mast:
+    name: Central Mast
+    model: mast_model
+    mass: 0.009628
+assembly:
+- step: 0
+  part: base_frame
+  parent: fixture
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - !!float '0'
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps: []
+  notes: Preassembled base with four corner sockets.
+- step: 1
+  part: leg_fl
+  parent: base_frame
+  rel_pos:
+  - -0.05
+  - -0.05
+  - 0.006
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 0
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Identical stepped leg inserted vertically into a base socket.
+- step: 2
+  part: leg_bl
+  parent: base_frame
+  rel_pos:
+  - -0.05
+  - 0.05
+  - 0.006
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 1
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Identical stepped leg inserted vertically into a base socket.
+- step: 3
+  part: leg_fr
+  parent: base_frame
+  rel_pos:
+  - 0.05
+  - -0.05
+  - 0.006
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 2
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Identical stepped leg inserted vertically into a base socket.
+- step: 4
+  part: leg_br
+  parent: base_frame
+  rel_pos:
+  - 0.05
+  - 0.05
+  - 0.006
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 3
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Identical stepped leg inserted vertically into a base socket.
+- step: 5
+  part: mid_deck
+  parent: base_frame
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.058
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 4
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Slides downward over all four upper leg sections.
+- step: 6
+  part: top_deck
+  parent: base_frame
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.109
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 5
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Seats onto all four tower-leg tips.
+- step: 7
+  part: mast
+  parent: top_deck
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.004
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 6
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Stepped mast inserted into the central top-deck socket.
+symmetry_groups:
+  tower_legs:
+  - leg_fl
+  - leg_bl
+  - leg_fr
+  - leg_br
