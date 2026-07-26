@@ -1,0 +1,225 @@
+{
+  "l3_only_replay_of": "D:\\Project\\wrs-sealp\\sealp\\examples\\layout\\experiments\\_output\\p4v2\\p4v2_tower_noupright_tower_seed0.json",
+  "l3_staging_aware": "PASS",
+  "l3_fail_step": "",
+  "l3_fail_reason": "",
+  "l3_grasp_dir": "sealp/examples/grasp/tower_grasp",
+  "source_objective_cost": 4.473339853057048,
+  "source_layout_fingerprint": "C0.3760,-0.0550|post_br:0.4415,0.2080:identity_y000|post_fr:0.4415,-0.2080:identity_y000|post_bl:0.1919,0.2080:identity_y000|post_fl:0.1919,-0.1248:identity_y000|middle_plate:0.2335,0.1255:rot90_04_y000|top_cross:0.2740,0.0703:identity_y000|beam|0.07|8|1|5|0.1|0.005|0.001|False|False|base_plate,post_br,post_fr,post_bl,post_fl,middle_plate,top_cross",
+  "source_assembly_center": [
+    0.376,
+    -0.055,
+    0.0
+  ],
+  "source_best_layout": {
+    "top_cross": {
+      "init_pos": [
+        0.2740319380468658,
+        0.07033333346247675,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "fs_yaw",
+      "arm_choice": "lft",
+      "grasp_count": 4,
+      "manipulability": 0.006554357485470352,
+      "dist_to_goal": 0.2190779145310969,
+      "rot_name": "identity_y000",
+      "yaw_deg": 0.0,
+      "gids": [
+        242,
+        84,
+        156,
+        115
+      ]
+    },
+    "middle_plate": {
+      "init_pos": [
+        0.23349999999999999,
+        0.12551999983191486,
+        0.0699999986588955
+      ],
+      "init_rotmat": [
+        1.0000000000000002,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        -1.0000000000000002,
+        0.0,
+        1.0000000000000002,
+        0.0
+      ],
+      "pose_tag": "fs_yaw",
+      "arm_choice": "lft",
+      "grasp_count": 4,
+      "manipulability": 0.003418324338086991,
+      "dist_to_goal": 0.24258162141070574,
+      "rot_name": "rot90_04_y000",
+      "yaw_deg": 0.0,
+      "gids": [
+        6,
+        1,
+        86,
+        80
+      ]
+    },
+    "post_fl": {
+      "init_pos": [
+        0.19190166671574116,
+        -0.1247949998527765,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "fs_yaw",
+      "arm_choice": "lft",
+      "grasp_count": 4,
+      "manipulability": 0.018126976468012413,
+      "dist_to_goal": 0.12219343617028867,
+      "rot_name": "identity_y000",
+      "yaw_deg": 0.0,
+      "gids": [
+        93,
+        76,
+        5,
+        72
+      ]
+    },
+    "post_bl": {
+      "init_pos": [
+        0.19190166671574116,
+        0.20799166642129419,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "fs_yaw",
+      "arm_choice": "lft",
+      "grasp_count": 4,
+      "manipulability": 0.0160696480673112,
+      "dist_to_goal": 0.24573936488741918,
+      "rot_name": "identity_y000",
+      "yaw_deg": 0.0,
+      "gids": [
+        119,
+        97,
+        87,
+        37
+      ]
+    },
+    "post_fr": {
+      "init_pos": [
+        0.44149166642129417,
+        -0.20799166642129419,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "fs_yaw",
+      "arm_choice": "lft",
+      "grasp_count": 4,
+      "manipulability": 0.016045926246102453,
+      "dist_to_goal": 0.10427838184499909,
+      "rot_name": "identity_y000",
+      "yaw_deg": 0.0,
+      "gids": [
+        97,
+        142,
+        184,
+        235
+      ]
+    },
+    "post_br": {
+      "init_pos": [
+        0.44149166642129417,
+        0.20799166642129419,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "fs_yaw",
+      "arm_choice": "lft",
+      "grasp_count": 4,
+      "manipulability": 0.016020269600816376,
+      "dist_to_goal": 0.21425953312022353,
+      "rot_name": "identity_y000",
+      "yaw_deg": 0.0,
+      "gids": [
+        97,
+        142,
+        184,
+        235
+      ]
+    },
+    "base_plate": {
+      "init_pos": [
+        0.376,
+        -0.055,
+        0.0
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "preassembled_at_assembly_region",
+      "arm_choice": "preassembled",
+      "grasp_count": 20,
+      "manipulability": 0.0,
+      "dist_to_goal": 0.0
+    }
+  }
+}

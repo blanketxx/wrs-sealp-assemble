@@ -1,0 +1,144 @@
+# SEALP Workspace Layout v1.0
+# p4v2_tower_noupright
+
+format_version: '1.0'
+name: p4v2_tower_noupright
+robot_base:
+  pos:
+  - !!float '0'
+  - !!float '0'
+  - !!float '0'
+  rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+assembly_station:
+  pos:
+  - 0.376
+  - -0.055
+  - !!float '0'
+  rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+staging:
+  top_cross:
+    pos:
+    - 0.274032
+    - 0.0703333
+    - 0.01
+    rotmat:
+    - - !!float '1'
+      - !!float '0'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '1'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '0'
+      - !!float '1'
+  middle_plate:
+    pos:
+    - 0.2335
+    - 0.12552
+    - 0.07
+    rotmat:
+    - - !!float '1'
+      - !!float '0'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '0'
+      - !!float '-1'
+    - - !!float '0'
+      - !!float '1'
+      - !!float '0'
+  post_fl:
+    pos:
+    - 0.191902
+    - -0.124795
+    - 0.01
+    rotmat:
+    - - !!float '1'
+      - !!float '0'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '1'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '0'
+      - !!float '1'
+  post_bl:
+    pos:
+    - 0.191902
+    - 0.207992
+    - 0.01
+    rotmat:
+    - - !!float '1'
+      - !!float '0'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '1'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '0'
+      - !!float '1'
+  post_fr:
+    pos:
+    - 0.441492
+    - -0.207992
+    - 0.01
+    rotmat:
+    - - !!float '1'
+      - !!float '0'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '1'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '0'
+      - !!float '1'
+  post_br:
+    pos:
+    - 0.441492
+    - 0.207992
+    - 0.01
+    rotmat:
+    - - !!float '1'
+      - !!float '0'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '1'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '0'
+      - !!float '1'
+  base_plate:
+    pos:
+    - 0.376
+    - -0.055
+    - !!float '0'
+    rotmat:
+    - - !!float '1'
+      - !!float '0'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '1'
+      - !!float '0'
+    - - !!float '0'
+      - !!float '0'
+      - !!float '1'
+metadata:
+  l2_pass: true
+  l3_pass: false

@@ -194,16 +194,33 @@ class FSRegSpotCollection(object):
         self._fsregspot_list += other._fsregspot_list
         return self
 
-    def add_new_spot(self, spot_pos, spot_rotz, barrier_z_offset=.0, consider_robot=True, toggle_dbg=False):
+    def add_new_spot(self, spot_pos, spot_rotz, barrier_z_offset=.0, consider_robot=True, toggle_dbg=False,
+                     extra_obstacle_list=None):
+        """
+        :param extra_obstacle_list: scene obstacles (placed parts, staged parts, fixtures) that a
+            re-grasp spot must also be clear of. Without them a spot is only validated against the
+            surface barrier, so it may sit inside an already placed part.
+        """
         fs_regspot = FSRegSpot(spot_pos, spot_rotz)
         if barrier_z_offset is not None:
             obstacle_list = [mcm.gen_surface_barrier(spot_pos[2] + barrier_z_offset)]
         else:
             obstacle_list = []
+        if extra_obstacle_list:
+            obstacle_list = obstacle_list + list(extra_obstacle_list)
         for pose_id, pose in enumerate(self.fs_reference_poses):
             pos = pose[0] + spot_pos
             rotmat = rm.rotmat_from_euler(0, 0, spot_rotz) @ pose[1]
-            mgm.gen_frame(pos=pos, rotmat=rotmat).attach_to(base)
+            if toggle_dbg:
+                mgm.gen_frame(pos=pos, rotmat=rotmat).attach_to(base)
+            # find_feasible_gids only tests the gripper and the arm, never the object itself, so a
+            # spot pose that buries the object inside an already placed part would pass. Reject those
+            # poses explicitly before spending IK on them.
+            if extra_obstacle_list and self.obj_cmodel is not None:
+                obj_probe = self.obj_cmodel.copy()
+                obj_probe.pose = (pos, rotmat)
+                if obj_probe.is_mcdwith(cmodel_list=list(extra_obstacle_list)):
+                    continue
             feasible_gids, feasible_grasps, feasible_confs = self.grasp_reasoner.find_feasible_gids(
                 goal_pose=(pos, rotmat),
                 obstacle_list=obstacle_list,
@@ -215,7 +232,7 @@ class FSRegSpotCollection(object):
                                                  feasible_gids=feasible_gids,
                                                  feasible_grasps=feasible_grasps,
                                                  feasible_confs=feasible_confs))
-            if toggle_dbg:
+            if toggle_dbg and feasible_gids is not None:
                 for grasp, jnt_values in zip(feasible_grasps, feasible_confs):
                     self.robot.goto_given_conf(jnt_values=jnt_values, ee_values=grasp.ee_values)
                     self.robot.gen_meshmodel().attach_to(base)

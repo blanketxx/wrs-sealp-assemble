@@ -11,7 +11,7 @@
    - 不写死 tower 的具体坐标；
    - 读取 .asmdef 决定零件模型和目标装配位姿；
    - 读取 .layout 决定 assembly_station 和 staging 初始摆放；
-   - 读取 .layout.metadata["arm_choice"] 作为优先手臂，但失败后会自动尝试另一只手。
+   - 读取 .layout.metadata["arm_choice"] 作为优先手臂；config 中 robot.mode=single 时只规划左臂。
 2. 动态障碍物：
    - 已装好的零件：使用 goal pose，作为后续步骤障碍物；
    - 未装零件：使用 staging pose，作为后续步骤障碍物；
@@ -21,9 +21,11 @@
    - 会继续尝试后续零件；
    - 最后播放所有成功规划出来的步骤动画；
    - 同时显示初始布局、目标 ghost、已成功装配的零件。
-4. middle_plate **直接走双臂换手**（跳过单臂 pick-place，需预生成 hopg）：
-   - ``tower_handover/middle_plate_hopg.pickle``
-   - 生成命令：``python -m sealp.examples.grasp.gen_middle_plate_regrasp_data``
+4. middle_plate 走 **单臂**：先试强制 Cartesian 直线 approach/depart 的 pick-place，
+   全部失败后改用 ``DirectTransportPrimitive``（同一只手臂、同一个 grasp，取放段用 RRT
+   连接，不生成强制直线段，不换手、不中途放下）。双臂换手默认关闭，仅
+   ``--middle-plate-handover`` 时才启用，届时需要预生成
+   ``tower_handover/middle_plate_hopg.pickle``。
 5. 默认使用 **box（AABB 包围盒）** 做避障碰撞，比 mesh/triangles 更快、更保守。
    - 需要更精细碰撞可传 ``--cdprim-type triangles``。
 6. 运输障碍与落位接触豁免分离：
@@ -102,13 +104,19 @@ if PROJECT_ROOT not in sys.path:
 
 from sealp.assembly_sequence import AssemblyDef
 from sealp.config import load_config
+from sealp.config.workspace_settings import load_workspace_settings
 from sealp.colliders import StaticEnvironment
 from sealp.layout import WorkspaceLayout
 from sealp.layout._viz_common import load_table_box
+from sealp.layout.layout_robot_factory import (
+    create_layout_robot,
+    get_layout_arm,
+    goto_home_joints,
+    iter_layout_arms,
+)
 from sealp.primitives.transport import TransportPrimitive
+from sealp.primitives.direct_transport import DirectTransportPrimitive
 from wrs.grasping.grasp import GraspCollection
-
-import wrs.robot_sim.robots.robot_panthera_ht.panthera_ht_dual_arm as pda
 
 
 # ============================================================
@@ -130,11 +138,15 @@ MOTION_CACHE_FORMAT_VERSION = "2.4"
 # middle_plate 直接走换手，不走单臂 pick-place（默认关，见 --middle-plate-handover）
 HANDOVER_PART_IDS = frozenset({"middle_plate"})
 
-# 免直线落位的零件: 这些件被周围已装件(如四根立柱)包围, 标准 pick-place 强制走的
-# 直线 approach/depart 一定会撞。对它们把 pick/place 的 approach/depart 直线距离全
-# 设为 0 → 直线段退化成"只在抓取位做一次 IK", 取放之间仍走 RRT(可绕柱), 从而单臂
-# 也能放进去(等价于之前换手退化路径里 toggle_start_approach/end_depart=False 的效果)。
+# 允许走"无强制 Cartesian 直线段"单臂规划的零件。这些件被周围已装件(如四根立柱)包围,
+# 标准 pick-place 强制生成的直线 approach/depart 要求沿线每个插值位姿都有 IK, middle_plate
+# 的所有共同抓取都死在 `IK not solvable in gen_linear_motion` 上。把距离缩到 0 治不了根:
+# distance=0 时 start_tcp_pos == goal_tcp_pos, gen_linear_motion 仍会被调用并重解 IK。
+# DirectTransportPrimitive 以认证过的 q_pick/q_place 为锚点用 RRT 连接, 全程单臂同一个
+# grasp, 不换手也不中途放下 —— 与之前换手路径里 toggle_start_approach/end_depart=False
+# 实际走出来的那条单臂轨迹同口径。
 NOLINEAR_PART_IDS = frozenset({"middle_plate"})
+LINEAR_FREE_TAG = "linear_free"
 
 
 # ============================================================
@@ -1294,7 +1306,11 @@ def _motion_candidate_kwargs(pid: str, arm_tag: str, *, skip_place_depart: bool 
 
     spec_map = {name: (pd, pa, pld) for name, pd, pa, pld in specs}
 
-    # 免直线落位件: 直线段距离全 0, 取放间仍走 RRT 绕障
+    # 直线段距离缩到 0 并不会跳过直线段: gen_rel_linear_motion 在 distance=0 时算出
+    # start_tcp_pos == goal_tcp_pos, 然后照样调 gen_linear_motion 并以 seed=None 重解 IK,
+    # 所以既没省掉 IK, 还可能落到与已认证抓取不同的 IK 分支上。真正不生成这段的做法见
+    # LINEAR_FREE_TAG / DirectTransportPrimitive; 这里的 0 距离只是"尽量短", 保留作为
+    # 第一批候选(能过就仍然用更严格的强制直线解)。
     no_linear = pid in NOLINEAR_PART_IDS
     pick_dep_d = 0.0 if no_linear else PICK_DEPART_DIST
     place_app_d = 0.0 if no_linear else PLACE_APPROACH_DIST
@@ -1317,6 +1333,25 @@ def _motion_candidate_kwargs(pid: str, arm_tag: str, *, skip_place_depart: bool 
     return out
 
 
+def _linear_free_kwargs(pid: str, arm_tag: str) -> Dict:
+    """落位方向传给无直线段规划器: 它只用这个方向摆放"接触前的让位构型"。"""
+    _, kwargs = _motion_candidate_kwargs(pid, arm_tag)[0]
+    return {"place_depart_direction_list": kwargs["place_depart_direction_list"]}
+
+
+def _plan_candidates(pid: str, arm_tag: str, *, skip_place_depart: bool = False):
+    """本步要依次尝试的规划方案。
+
+    先把所有强制 Cartesian 直线段的方向候选试完 —— 它约束更强, 能过就用它。全部失败后,
+    对 ``NOLINEAR_PART_IDS`` 里的零件再试一次无强制直线段的单臂规划(仍是同一只手臂、
+    同一个 grasp, 不换手也不中途放下)。
+    """
+    out = _motion_candidate_kwargs(pid, arm_tag, skip_place_depart=skip_place_depart)
+    if pid in NOLINEAR_PART_IDS:
+        out = list(out) + [(LINEAR_FREE_TAG, {})]
+    return out
+
+
 def _last_assembly_part_id(part_order: List[str], layout: WorkspaceLayout) -> Optional[str]:
     """装配顺序里最后一个需要规划的零件(跳过 preassembled 如 base_plate)。"""
     for pid in reversed(part_order):
@@ -1327,14 +1362,11 @@ def _last_assembly_part_id(part_order: List[str], layout: WorkspaceLayout) -> Op
 
 
 def _goto_home_sim(runner, base=None) -> None:
-    """仿真里把双臂回到 home 并可选显示 home 姿态 mesh。"""
+    """仿真里把机械臂回到 home 并可选显示 home 姿态 mesh。"""
     if runner is None:
         return
-    try:
-        runner.robot.lft_arm.goto_given_conf(HOME_JV)
-        runner.robot.rgt_arm.goto_given_conf(HOME_JV)
-    except Exception:
-        pass
+    single_arm = bool(getattr(runner, "single_arm_mode", False))
+    goto_home_joints(runner.robot, HOME_JV, single_arm=single_arm)
     if base is not None:
         try:
             prev = getattr(runner, "_home_pose_mesh", None)
@@ -1351,8 +1383,16 @@ def _goto_home_sim(runner, base=None) -> None:
     print("[HOME] 全部零件放置完成，机械臂回到 home。")
 
 
-def _arm_try_order(pid: str, preferred: Optional[str]) -> List[str]:
-    """优先使用 layout 里给出的 arm_choice，失败后尝试另一只手。"""
+def _arm_try_order(
+    pid: str,
+    preferred: Optional[str],
+    *,
+    single_arm: bool = False,
+) -> List[str]:
+    """优先使用 layout 里给出的 arm_choice；单臂模式下只规划左臂。"""
+    if single_arm:
+        return ["lft"]
+
     if preferred in ("lft", "rgt"):
         other = "rgt" if preferred == "lft" else "lft"
         return [preferred, other]
@@ -1830,14 +1870,17 @@ class LayoutSequenceVisualizer:
             getattr(self.layout, "robot_base_rotmat", np.eye(3)), dtype=float
         )
 
-        self.robot = pda.DualPantheraHTNoBody(
-            pos=self.robot_base_pos,
-            rotmat=self.robot_base_rotmat,
-            arm_y_offset=DUAL_ARM_Y_OFFSET,
+        ws = load_workspace_settings(config_path)
+        self.single_arm_mode = bool(ws.get("single_arm", False))
+        robot_bundle = create_layout_robot(
+            single_arm=self.single_arm_mode,
+            robot_base_pos=self.robot_base_pos,
+            robot_base_rotmat=self.robot_base_rotmat,
+            dual_arm_y_offset=float(ws.get("dual_arm_y_offset", DUAL_ARM_Y_OFFSET)),
             enable_cc=True,
         )
-        self.robot.lft_arm.goto_given_conf(HOME_JV)
-        self.robot.rgt_arm.goto_given_conf(HOME_JV)
+        self.robot = robot_bundle.robot
+        goto_home_joints(self.robot, HOME_JV, single_arm=self.single_arm_mode)
 
         self.env_obstacles = load_env_obstacles(config_path, base)
         self.grasps = load_grasp_cache(self.asm, self.part_order, grasp_dir, self.grasp_map)
@@ -2018,6 +2061,8 @@ class LayoutSequenceVisualizer:
         return self.enable_middle_plate_regrasp and pid in HANDOVER_PART_IDS
 
     def _handover_arm_pairs(self, pid: str):
+        if self.single_arm_mode:
+            return []
         meta = getattr(self.layout, "metadata", {}) or {}
         preferred = (meta.get("arm_choice", {}) or {}).get(pid)
         pairs = [
@@ -2294,7 +2339,7 @@ class LayoutSequenceVisualizer:
 
         meta = getattr(self.layout, "metadata", {}) or {}
         preferred_arm = (meta.get("arm_choice", {}) or {}).get(pid)
-        arm_order = _arm_try_order(pid, preferred_arm)
+        arm_order = _arm_try_order(pid, preferred_arm, single_arm=self.single_arm_mode)
 
         last_err = ""
         if pid == self._last_assembly_pid:
@@ -2302,10 +2347,10 @@ class LayoutSequenceVisualizer:
         print(f"\n[PLAN] pid={pid}, preferred_arm={preferred_arm}, try_order={arm_order}")
 
         for arm_tag in arm_order:
-            arm = self.robot.rgt_arm if arm_tag == "rgt" else self.robot.lft_arm
+            arm = get_layout_arm(self.robot, arm_tag, single_arm=self.single_arm_mode)
             transport = TransportPrimitive(arm)
 
-            for motion_tag, motion_kwargs in _motion_candidate_kwargs(
+            for motion_tag, motion_kwargs in _plan_candidates(
                     pid, arm_tag,
                     skip_place_depart=(pid == self._last_assembly_pid)):
                 # 每次尝试复制一个 moving object，避免失败污染 staging model
@@ -2331,30 +2376,43 @@ class LayoutSequenceVisualizer:
                 self._maybe_debug_obstacles(pid, placed, transit_obs, placement_obs)
 
                 try:
-                    try:
-                        res = transport.plan(
+                    if motion_tag == LINEAR_FREE_TAG:
+                        # 无强制 Cartesian 直线段的单臂规划: 同一只手臂、同一个 grasp,
+                        # 以认证过的 q_pick/q_place 为锚点用 RRT 连接。全程单臂, 不换手,
+                        # 不中途放下; IK/关节限位/碰撞照旧严格检查。
+                        res = DirectTransportPrimitive(arm).plan(
                             obj_cmodel=moving,
                             grasp_collection=gc,
                             goal_pose_list=[(np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))],
                             obstacle_list=transit_obs,
                             grasp_obstacle_list=placement_obs,
-                            approach_distance=APPROACH_DIST,
-                            depart_distance=PICK_DEPART_DIST,
-                            linear_granularity=LINEAR_GRANULARITY,
-                            **motion_kwargs,
+                            **_linear_free_kwargs(pid, arm_tag),
                         )
-                    except TypeError:
-                        # 兼容旧版 TransportPrimitive.plan：没有 grasp_obstacle_list 时仍能运行。
-                        res = transport.plan(
-                            obj_cmodel=moving,
-                            grasp_collection=gc,
-                            goal_pose_list=[(np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))],
-                            obstacle_list=transit_obs,
-                            approach_distance=APPROACH_DIST,
-                            depart_distance=PICK_DEPART_DIST,
-                            linear_granularity=LINEAR_GRANULARITY,
-                            **motion_kwargs,
-                        )
+                    else:
+                        try:
+                            res = transport.plan(
+                                obj_cmodel=moving,
+                                grasp_collection=gc,
+                                goal_pose_list=[(np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))],
+                                obstacle_list=transit_obs,
+                                grasp_obstacle_list=placement_obs,
+                                approach_distance=APPROACH_DIST,
+                                depart_distance=PICK_DEPART_DIST,
+                                linear_granularity=LINEAR_GRANULARITY,
+                                **motion_kwargs,
+                            )
+                        except TypeError:
+                            # 兼容旧版 TransportPrimitive.plan：没有 grasp_obstacle_list 时仍能运行。
+                            res = transport.plan(
+                                obj_cmodel=moving,
+                                grasp_collection=gc,
+                                goal_pose_list=[(np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))],
+                                obstacle_list=transit_obs,
+                                approach_distance=APPROACH_DIST,
+                                depart_distance=PICK_DEPART_DIST,
+                                linear_granularity=LINEAR_GRANULARITY,
+                                **motion_kwargs,
+                            )
                 except Exception as e:
                     last_err = (
                         f"{pid} {arm_tag} motion={motion_tag}: "
@@ -2447,16 +2505,16 @@ class LayoutSequenceVisualizer:
         return None, last_err or f"{pid}: all arm/motion candidates failed"
 
     def _backup_robot_state(self):
-        """备份左右臂状态。失败后恢复，避免失败尝试污染后续步骤。"""
-        for arm in (self.robot.lft_arm, self.robot.rgt_arm):
+        """备份机械臂状态。失败后恢复，避免失败尝试污染后续步骤。"""
+        for arm in iter_layout_arms(self.robot, single_arm=self.single_arm_mode):
             try:
                 arm.backup_state()
             except Exception:
                 pass
 
     def _restore_robot_state(self):
-        """恢复左右臂状态。"""
-        for arm in (self.robot.lft_arm, self.robot.rgt_arm):
+        """恢复机械臂状态。"""
+        for arm in iter_layout_arms(self.robot, single_arm=self.single_arm_mode):
             try:
                 arm.restore_state()
             except Exception:
@@ -2506,6 +2564,7 @@ class LayoutSequenceVisualizer:
         print(f"part_order       = {self.part_order}")
         print(f"cdprim_type      = {self.cdprim_type}")
         print("continue_on_fail = True")
+        print(f"single_arm_mode  = {self.single_arm_mode}  # config robot.mode=single 时只规划左臂")
 
         placed = set()
         success_steps: List[StepMotion] = []
@@ -2855,13 +2914,19 @@ def _make_cached_dual_frame(
     """
     # 两臂关节角始终更新(保证 ghost/真换手渲染时位姿正确)。
     _goto_arm(runner.robot.lft_arm, lft_jv, lft_ee)
-    _goto_arm(runner.robot.rgt_arm, rgt_jv, rgt_ee)
+    if runner.robot.rgt_arm is not None:
+        _goto_arm(runner.robot.rgt_arm, rgt_jv, rgt_ee)
 
     full_robot = bool(getattr(runner, "anime_full_robot", False))
     sides = set(active_sides) if active_sides else set()
     # 只有一只手臂参与这步 -> 只画那只手臂(轻量)。
     if not full_robot and len(sides) == 1:
-        arm = runner.robot.rgt_arm if "rgt" in sides else runner.robot.lft_arm
+        arm_tag = "rgt" if "rgt" in sides else "lft"
+        arm = get_layout_arm(
+            runner.robot,
+            arm_tag,
+            single_arm=bool(getattr(runner, "single_arm_mode", False)),
+        )
         mesh = _gen_arm_mesh(arm, alpha=1.0)
         if mesh is not None:
             return mesh
@@ -3164,6 +3229,9 @@ def main():
     print(f"config     = {config_path}")
     print(f"grasp_dir  = {grasp_dir}")
     print(f"cdprim     = {args.cdprim_type}  # 默认 box(AABB)")
+    ws = load_workspace_settings(config_path)
+    single_arm_mode = bool(ws.get("single_arm", False))
+    print(f"robot_mode         = {'single(lft only)' if single_arm_mode else 'dual'}  # from config robot.mode")
     print(f"middle_plate_handover = {mp_handover}  # 默认 False(单臂); 用 --middle-plate-handover 恢复")
     if mp_handover:
         print(f"handover_dir = {os.path.abspath(args.handover_dir)}")
