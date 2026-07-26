@@ -89,6 +89,7 @@ from sealp.layout import WorkspaceLayout
 from sealp.layout.dual_staging_search import find_obstacle_def
 from sealp.primitives.transport import TransportPrimitive
 from sealp.primitives.direct_transport import DirectTransportPrimitive
+from sealp.primitives.seating_collision import direct_transport_seating_kwargs
 from sealp.primitives.regrasp import SingleArmRegraspPrimitive
 
 try:
@@ -2091,7 +2092,8 @@ class WeightedInitialLayoutSearcher:
 
         与执行脚本 _default_contact_exclusion_map 保持一致:
             - top_cross 插入 middle_plate 顶面方孔 -> 规划 top_cross 时排除 middle_plate;
-            - middle_plate 承托在四根 post 顶端    -> 规划 middle_plate 时排除四根 post。
+            - middle_plate 与四根 post 的承托/孔位在 DirectTransportPrimitive 里用 triangle mesh
+              分阶段检测，不再把 post 从 placement 障碍里整段删除。
         另外每个零件 asmdef 里的 direct parent 也会在 _contact_exclusion_set 里自动排除。
 
         上面两条是按 tower 的零件名硬编码的, 换一个装配体就不会触发 (例如
@@ -2109,7 +2111,7 @@ class WeightedInitialLayoutSearcher:
             out.setdefault("top_cross", []).append("middle_plate")
         post_ids = [p for p in ("post_bl", "post_fl", "post_br", "post_fr") if p in part_ids]
         if "middle_plate" in part_ids and post_ids:
-            out.setdefault("middle_plate", []).extend(post_ids)
+            pass  # posts stay as obstacles; mesh seating handled in DirectTransportPrimitive
         for pid, others in self._contact_sidecar().items():
             if pid not in part_ids:
                 continue
@@ -3281,6 +3283,7 @@ class WeightedInitialLayoutSearcher:
                     goal_pose_list=[(np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))],
                     obstacle_list=obs,
                     grasp_obstacle_list=placement_obs,
+                    **direct_transport_seating_kwargs(pid, self.part_order, obs),
                     **tk,
                 )
             except Exception as e:

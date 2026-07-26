@@ -66,6 +66,11 @@ import wrs.motion.primitives.interpolated as mpi
 import wrs.motion.probabilistic.rrt_connect as rrtc
 
 from .base import MotionPrimitive, PrimitiveResult
+from .seating_collision import (
+    goal_mating_pose_valid,
+    to_triangle_cdmesh,
+    waypoint_seating_valid,
+)
 
 Pose = Tuple[np.ndarray, np.ndarray]
 
@@ -143,9 +148,16 @@ class DirectTransportPrimitive(MotionPrimitive):
         Recognised keyword arguments
         ----------------------------
         grasp_obstacle_list
-            Contact-exempt obstacle set, i.e. the scene minus the parts this object mates with by
-            construction. Used to certify the grasps and to make ``q_place`` admissible. The strict
-            ``obstacle_list`` is what every waypoint is audited against.
+            Legacy contact-exempt obstacle set kept for API compatibility with
+            :class:`TransportPrimitive`.  When ``seating_mesh_obstacles`` is supplied, mating
+            partners stay in the strict obstacle set for pick/transport/stand-off and are checked
+            with triangle mesh during seating instead of being removed wholesale.
+
+        seating_mesh_obstacles
+            Triangle-mesh copies of mating partners (e.g. the four tower posts for
+            ``middle_plate``).  When non-empty, enables phased seating collision: strict obstacles
+            everywhere, mesh held-object checks on the stand-off -> goal segment, goal pose
+            certified with mesh geometry rather than box exclusion.
 
         place_depart_direction_list
             Mating axis of the assembly. The stand-off configuration above the goal is placed along
@@ -170,6 +182,8 @@ class DirectTransportPrimitive(MotionPrimitive):
         strict_obs = list(obstacle_list)
         grasp_obs = kwargs.get("grasp_obstacle_list")
         relaxed_obs = list(grasp_obs) if grasp_obs is not None else list(strict_obs)
+        mating_mesh_obs = list(kwargs.get("seating_mesh_obstacles") or [])
+        phased_seating = bool(mating_mesh_obs)
         # Stand-off directions. At the goal it is the assembly's mating axis, so the object enters
         # its seat the way the assembly requires. At the pick it is straight back out of the
         # gripper, which is the only direction guaranteed to clear a side grasp; note this is
@@ -198,7 +212,11 @@ class DirectTransportPrimitive(MotionPrimitive):
 
         self.robot.backup_state()
         try:
-            candidates = self._certify_grasps(grasp_collection, start_pose, goal_pose, relaxed_obs)
+            candidates = self._certify_grasps(
+                grasp_collection, start_pose, goal_pose, strict_obs, relaxed_obs,
+                obj_cmodel=obj_cmodel, mating_mesh_obs=mating_mesh_obs,
+                phased_seating=phased_seating,
+            )
         finally:
             self.robot.restore_state()
         if not candidates:
@@ -225,6 +243,9 @@ class DirectTransportPrimitive(MotionPrimitive):
                     end_jnt_values=end_jnt_values,
                     strict_obs=strict_obs,
                     relaxed_obs=relaxed_obs,
+                    mating_mesh_obs=mating_mesh_obs,
+                    phased_seating=phased_seating,
+                    goal_pose=goal_pose,
                     pick_standoff_dir=pick_standoff_dir,
                     place_standoff_dir=place_standoff_dir,
                 )
@@ -321,24 +342,32 @@ class DirectTransportPrimitive(MotionPrimitive):
 
     # ------------------------------------------------------------------
     def _certify_grasps(self, grasp_collection, start_pose, goal_pose,
-                        obstacle_list) -> List[_GraspCandidate]:
+                        strict_obs, relaxed_obs, *, obj_cmodel, mating_mesh_obs,
+                        phased_seating) -> List[_GraspCandidate]:
         """Grasps that are IK-feasible and collision-free at the staging pose and at the goal pose.
 
         Both configurations are kept. ``q_place`` is solved with ``q_pick`` as its IK seed so the two
         lie on the same branch, which is what makes the joint-space transport short and is also the
         continuity the Cartesian segments were trying to obtain by interpolating.
+
+        With ``phased_seating``, pick uses ``strict_obs`` and goal uses ``strict_obs`` for the arm
+        plus a triangle-mesh mating check for the object (posts stay in the scene; holes are not
+        treated as solid box slabs).
         """
         out: List[_GraspCandidate] = []
         sp, sr = start_pose
         gp, gr = goal_pose
+        pick_obs = strict_obs if phased_seating else relaxed_obs
+        place_obs = strict_obs if phased_seating else relaxed_obs
         for gid in range(len(grasp_collection)):
             grasp = grasp_collection[gid]
-            q_pick = self._ik_at(sp, sr, grasp, obstacle_list, seed=None)
+            q_pick = self._ik_at(sp, sr, grasp, pick_obs, seed=None)
             if q_pick is None:
                 continue
-            q_place = self._ik_at(gp, gr, grasp, obstacle_list, seed=q_pick)
-            if q_place is None:
-                continue
+            q_place = self._ik_at_place_phased(
+                gp, gr, grasp, strict_obs, mating_mesh_obs,
+                to_triangle_cdmesh(obj_cmodel), seed=q_pick) if phased_seating else self._ik_at(
+                gp, gr, grasp, place_obs, seed=q_pick)
             out.append(_GraspCandidate(gid, grasp, q_pick, q_place))
         # Prefer grasps whose two configurations are closest in joint space: the arm has to
         # reorient the object the least, so the transport is easiest to connect.
@@ -358,9 +387,30 @@ class DirectTransportPrimitive(MotionPrimitive):
             return None
         return jnt_values
 
+    def _ik_at_place_phased(self, pos, rotmat, grasp, strict_obs, mating_mesh_obs,
+                            obj_mesh, seed):
+        """Goal grasp IK: arm checked against strict obstacles; object mating via triangle mesh.
+
+        Post box cdprims can false-positive against the gripper at the seated goal even when the
+        plate mesh clears the post holes.  When strict IK succeeds and mesh mating is valid, accept.
+        Otherwise retry arm IK with mating-partner *boxes* removed (mesh still required).
+        """
+        q = self._ik_at(pos, rotmat, grasp, strict_obs, seed=seed)
+        if q is not None and goal_mating_pose_valid(obj_mesh, (pos, rotmat), mating_mesh_obs):
+            return q
+        partner_ids = {getattr(o, "_sealp_part_id", None) for o in mating_mesh_obs}
+        arm_obs = [o for o in strict_obs if getattr(o, "_sealp_part_id", None) not in partner_ids]
+        q = self._ik_at(pos, rotmat, grasp, arm_obs, seed=seed)
+        if q is None:
+            return None
+        if goal_mating_pose_valid(obj_mesh, (pos, rotmat), mating_mesh_obs):
+            return q
+        return None
+
     # ------------------------------------------------------------------
     def _plan_with_grasp(self, cand, obj_cmodel, obj_at_start, obj_at_goal,
                          start_jnt_values, end_jnt_values, strict_obs, relaxed_obs,
+                         mating_mesh_obs, phased_seating, goal_pose,
                          pick_standoff_dir, place_standoff_dir):
         """Plan one grasp end to end. Returns ``(MotionData, "")`` or ``(None, reason)``.
 
@@ -368,9 +418,9 @@ class DirectTransportPrimitive(MotionPrimitive):
         short joint-space interpolation across the contact*. The stand-off configuration comes from
         a single IK call at a displaced pose, seeded from the certified configuration, and the
         interpolation needs no IK at all. That is what replaces the Cartesian segment: the long
-        part of the motion stays under the strict obstacle set, and only the last centimetres --
-        where the gripper must enclose the object, or the object must rest on the parts it mates
-        with -- run under the contact-exempt set, still audited against the strict one.
+        part of the motion stays under the strict obstacle set.  When ``phased_seating`` is active,
+        the final centimetres keep posts in ``strict_obs`` for the arm and add triangle-mesh held-
+        object checks so the plate cannot sweep through post bodies.
         """
         jaw_open = float(self.robot.end_effector.jaw_range[1])
         sp, sr = obj_at_start.pos, obj_at_start.rotmat
@@ -400,7 +450,7 @@ class DirectTransportPrimitive(MotionPrimitive):
                           f"({n_contact} waypoints)")
 
         # -- grasp, transport, seat --------------------------------------------------------------
-        obj_held = obj_cmodel.copy()
+        obj_held = to_triangle_cdmesh(obj_cmodel.copy()) if phased_seating else obj_cmodel.copy()
         obj_held.pose = (sp, sr)
         self.robot.goto_given_conf(cand.q_pick)
         self._empty_hand()
@@ -415,16 +465,25 @@ class DirectTransportPrimitive(MotionPrimitive):
                                   ee_values=cand.grasp.ee_values)
             if transport is None:
                 return None, f"gid={cand.gid} no rrt path from q_pick to the pre-place stand-off"
-            # seating: the mating parts are exempt because the object rests on them by construction
-            seat = self._interpolate(q_pre_place, cand.q_place, relaxed_obs,
-                                     ee_values=cand.grasp.ee_values)
-            if seat is None:
-                return None, f"gid={cand.gid} cannot seat the object from the stand-off"
-            ok, n_contact = self._contact_is_tail(seat, strict_obs, ee_values=cand.grasp.ee_values,
-                                                 want="tail")
-            if not ok:
-                return None, (f"gid={cand.gid} seating collides before it lands "
-                              f"({n_contact} waypoints)")
+            if phased_seating:
+                seat, seat_err = self._interpolate_seating(
+                    q_pre_place, cand.q_place, strict_obs, mating_mesh_obs,
+                    ee_values=cand.grasp.ee_values,
+                    obj_template=to_triangle_cdmesh(obj_cmodel),
+                    goal_pose=goal_pose)
+                if seat is None:
+                    return None, f"gid={cand.gid} {seat_err}"
+            else:
+                # Legacy path: contact-exempt relaxed obstacles + tail audit.
+                seat = self._interpolate(q_pre_place, cand.q_place, relaxed_obs,
+                                         ee_values=cand.grasp.ee_values)
+                if seat is None:
+                    return None, f"gid={cand.gid} cannot seat the object from the stand-off"
+                ok, n_contact = self._contact_is_tail(
+                    seat, strict_obs, ee_values=cand.grasp.ee_values, want="tail")
+                if not ok:
+                    return None, (f"gid={cand.gid} seating collides before it lands "
+                                  f"({n_contact} waypoints)")
         finally:
             # Always give the object back, including on the early returns above, so the next grasp
             # does not start with a hand that still thinks it is full.
@@ -448,8 +507,9 @@ class DirectTransportPrimitive(MotionPrimitive):
                 break
         if q_post_place is None:
             return None, f"gid={cand.gid} nowhere to retract to after releasing ({detail})"
-        back_off = self._interpolate(cand.q_place, q_post_place, relaxed_obs,
-                                    ee_values=jaw_release)
+        retract_obs_list = strict_obs if phased_seating else relaxed_obs
+        back_off = self._interpolate(cand.q_place, q_post_place, retract_obs_list,
+                                     ee_values=jaw_release)
         if back_off is None:
             return None, f"gid={cand.gid} cannot back off from the placed object"
         ok, n_contact = self._contact_is_tail(back_off, retract_obs, ee_values=jaw_release,
@@ -517,6 +577,49 @@ class DirectTransportPrimitive(MotionPrimitive):
         widths = [grasp_width + 0.006, grasp_width + 0.015, jaw_max]
         return [w for i, w in enumerate(widths)
                 if w <= jaw_max + 1e-9 and w not in widths[:i]]
+
+    def _interpolate_seating(self, start_conf, goal_conf, strict_obs, mating_mesh_obs,
+                             ee_values, obj_template, goal_pose):
+        """Joint-space seating with posts always in the arm obstacle set + mesh held-object checks."""
+        if np.allclose(start_conf, goal_conf):
+            self._goto(goal_conf, ee_values=ee_values)
+            if not self._robot_pose_clear(strict_obs, ee_values):
+                return None, "seating: arm collided at goal"
+            if not waypoint_seating_valid(
+                    self.robot, mating_mesh_obs, is_final=True,
+                    obj_template=obj_template, goal_pose=goal_pose):
+                return None, "seating: held object mesh penetrates mating partners at goal"
+            mot_data = motd.MotionData(robot=self.robot)
+            mot_data.extend(jv_list=[np.asarray(goal_conf, dtype=float)])
+            return mot_data, ""
+
+        interpolated = rm.interpolate_vectors(
+            start_vector=start_conf, end_vector=goal_conf, granularity=self.interp_granularity)
+        clipped = np.clip(interpolated, self.robot.jnt_ranges[:, 0], self.robot.jnt_ranges[:, 1])
+        jv_list = []
+        n = len(clipped)
+        for i, jnt_values in enumerate(clipped):
+            is_final = (i == n - 1)
+            self._goto(jnt_values, ee_values=ee_values)
+            if not self._robot_pose_clear(strict_obs, ee_values):
+                return None, "seating: arm/gripper collided with obstacles (posts included)"
+            if not waypoint_seating_valid(
+                    self.robot, mating_mesh_obs, is_final=is_final,
+                    obj_template=obj_template, goal_pose=goal_pose if is_final else None):
+                return None, ("seating: held object penetrates mating partner mesh "
+                              f"at waypoint {i + 1}/{n}")
+            jv_list.append(jnt_values)
+        mot_data = motd.MotionData(robot=self.robot)
+        mot_data.extend(jv_list=jv_list)
+        return mot_data, ""
+
+    def _robot_pose_clear(self, obstacle_list, ee_values) -> bool:
+        if self.robot.is_collided(obstacle_list=obstacle_list):
+            return False
+        ee = self.robot.end_effector
+        if ee is not None and ee.is_mesh_collided(cmodel_list=obstacle_list):
+            return False
+        return True
 
     def _interpolate(self, start_conf, goal_conf, obstacle_list, ee_values):
         """Straight line in *joint* space. No IK, so none of the Cartesian failure modes apply."""

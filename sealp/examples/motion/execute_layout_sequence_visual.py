@@ -29,7 +29,8 @@
 5. 默认使用 **box（AABB 包围盒）** 做避障碰撞，比 mesh/triangles 更快、更保守。
    - 需要更精细碰撞可传 ``--cdprim-type triangles``。
 6. 运输障碍与落位接触豁免分离：
-   - middle_plate 运输过程中会把四根柱子作为动态障碍，减少动画穿模；
+   - middle_plate 运输/落位：四根 post 始终在 transit 障碍中；DirectTransportPrimitive 落位段对
+     被抓 plate + post 使用 triangle mesh 检测，避免 box 把带孔板当成实心板而穿模。
    - 最终落位/插接附近仍保留必要的接触豁免。
 7. 动画效果仿照 LRMate200id_ppp_animation.py：
    - 初始零件留在 layout 位置；
@@ -117,6 +118,7 @@ from sealp.layout.layout_robot_factory import (
 )
 from sealp.primitives.transport import TransportPrimitive
 from sealp.primitives.direct_transport import DirectTransportPrimitive
+from sealp.primitives.seating_collision import direct_transport_seating_kwargs
 from wrs.grasping.grasp import GraspCollection
 
 
@@ -1447,17 +1449,14 @@ def _default_contact_exclusion_map(asm: AssemblyDef) -> Dict[str, List[str]]:
 
     对当前 tower：
         - top_cross 竖着插入 middle_plate 顶面方孔，所以规划 top_cross 时要临时排除 middle_plate；
-        - middle_plate 放到四根 post 顶部，最终接触面附近可能被 mesh 判交，所以规划 middle_plate 时可临时排除四根 post。
+        - middle_plate 与四根 post 的承托/孔位关系在 DirectTransportPrimitive 里用 triangle
+          mesh 分阶段检测，不再把 post 从 placement 障碍里整段删除。
     """
     part_ids = set(getattr(asm, "part_ids", []))
     out: Dict[str, List[str]] = {}
 
     if "top_cross" in part_ids and "middle_plate" in part_ids:
         out.setdefault("top_cross", []).append("middle_plate")
-
-    post_ids = [p for p in ("post_bl", "post_fl", "post_br", "post_fr") if p in part_ids]
-    if "middle_plate" in part_ids and post_ids:
-        out.setdefault("middle_plate", []).extend(post_ids)
 
     return out
 
@@ -2404,6 +2403,7 @@ class LayoutSequenceVisualizer:
                             goal_pose_list=[(np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))],
                             obstacle_list=transit_obs,
                             grasp_obstacle_list=placement_obs,
+                            **direct_transport_seating_kwargs(pid, self.asm.part_ids, transit_obs),
                             **_linear_free_kwargs(pid, arm_tag),
                         )
                     else:
