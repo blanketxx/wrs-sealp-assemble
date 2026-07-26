@@ -73,6 +73,7 @@ from sealp.examples.layout.infer_assembly_ga import (
     _parse_vec3,
 )
 from sealp.examples.layout.bsfs.search import search_site, rec_jsonable
+from sealp.layout import WorkspaceLayout
 from sealp.examples.layout.bsfs.oracle import StepOracle
 from sealp.examples.layout.bsfs.cost import CostParams
 from sealp.examples.layout.bsfs.seeding import (
@@ -110,6 +111,11 @@ def parse_args(argv=None):
     p.add_argument("--grasp-dir", default=fol.DEFAULT_GRASP_DIR)
     p.add_argument("--part-order", default="")
     p.add_argument("--goal-pos", default="0.373,0.0,0.0")
+    p.add_argument("--cdprim-type", default="box",
+                   help="Collision primitive used by the BSFS searcher; box matches the executor default.")
+    p.add_argument("--planner-obstacle-mode", default="staging_aware",
+                   choices=["mesh", "env_only", "none", "staging_aware", "executor_match"],
+                   help="Broad L2 common-grasp obstacle mode. A final executor_match confirmation is always applied.")
     # mode
     p.add_argument("--mode", choices=["exact", "beam"], default="beam")
     # ---- assembly-center search ----
@@ -312,13 +318,42 @@ def _layout_from_assign(searcher, assign: Dict[str, Dict],
     cand = LayoutCandidate(xy=xy)
     cand.assembly_station_pos = np.asarray(station, dtype=float).copy()
     cand.forced_rot_name = {pid: rec["rot_name"] for pid, rec in assign.items()}
+    if hasattr(cand, "require_executor_witness"):
+        cand.require_executor_witness = True
+    # Preserve BSFS witness as a PRIORITY hint. evaluate_layout revalidates these gids first and
+    # transparently falls back to the full library if the stricter executor endpoint semantics
+    # reject them.
+    if hasattr(cand, "grasp_gids"):
+        cand.grasp_gids = {
+            pid: [int(g) for g in (rec.get("gids") or [])]
+            for pid, rec in assign.items() if rec.get("gids")
+        }
+    cand.arm_choice.update({
+        pid: str(rec.get("arm"))
+        for pid, rec in assign.items() if rec.get("arm")
+    })
     return cand
 
 
 def _compact_assign(assign: Dict[str, Dict]) -> Dict[str, Dict]:
-    return {pid: {"xy": np.asarray(rec["xy"], dtype=float).tolist(),
-                  "rot_name": rec["rot_name"], "cost": float(rec.get("cost", 0.0))}
-            for pid, rec in assign.items()}
+    """Keep the BSFS L2 witness together with the pose.
+
+    Older code kept only xy/rot/cost here, silently dropping ``gids`` and ``arm`` before
+    yaw-refinement/final witness. That is why L3/execution had to rediscover grasps from scratch.
+    """
+    out: Dict[str, Dict] = {}
+    for pid, rec in assign.items():
+        item = {
+            "xy": np.asarray(rec["xy"], dtype=float).tolist(),
+            "rot_name": rec["rot_name"],
+            "cost": float(rec.get("cost", 0.0)),
+        }
+        for key in ("arm", "gids", "preferred_gid", "witness_source",
+                    "common_grasp_count", "pose_tag"):
+            if key in rec and rec.get(key) is not None:
+                item[key] = rec.get(key)
+        out[pid] = item
+    return out
 
 
 def _cand_by_rotname(searcher, pid: str, rot_name: str):
@@ -483,7 +518,8 @@ def _final_certification(searcher, args, assign, center, preassembled_pid) -> Di
         cand = _cand_by_rotname(searcher, pid, assign[pid]["rot_name"])
         xy = np.asarray(assign[pid]["xy"], dtype=float)
         seed_everything(task_seed(int(args.seed), cid, "finalcert", pid))
-        rec, reason = oracle.certify(pid, xy, cand, placed, staged, level=2)
+        rec, reason = oracle.certify(
+            pid, xy, cand, placed, staged, level=2, executor_confirm=True)
         if rec is None:
             recs[pid] = {"pid": pid, "certified": False, "reason": reason,
                          "rot_name": assign[pid]["rot_name"],
@@ -620,6 +656,11 @@ def _yaw_refine(searcher, args, assign, center, preassembled_pid, stats,
                 name = _register_yaw_cand(searcher, pid, base_rot[pid], d)
                 t = {q: dict(r) for q, r in cur.items()}
                 t[pid]["rot_name"] = name
+                # A grasp witness belongs to a specific staging orientation. Do not carry the
+                # old gid list across a yaw change; the final certification will generate a fresh one.
+                for _wk in ("gids", "preferred_gid", "witness_source",
+                            "common_grasp_count", "arm"):
+                    t[pid].pop(_wk, None)
                 trials.append(t)
                 names.append((d, name))
             if witness_batch_fn is not None:
@@ -714,6 +755,76 @@ def _merge_stats(agg: Dict, other: Dict) -> None:
             agg[k] = max(agg.get(k, 0), v)
         else:
             agg[k] = agg.get(k, 0) + v
+
+
+
+def _save_companion_layout(searcher, best: Dict, per_step: Dict[str, Dict],
+                           preassembled_pid: Optional[str], output_json: str) -> Optional[str]:
+    """Save the final BSFS result as a directly executable WorkspaceLayout with grasp witnesses."""
+    if not output_json:
+        return None
+    layout_path = os.path.splitext(os.path.abspath(output_json))[0] + ".layout"
+    staging = {}
+    arm_choice = {}
+    pose_tag = {}
+    rot_name = {}
+    grasp_witness = {}
+
+    for pid, entry in (best.get("best_layout") or {}).items():
+        pos = np.asarray(entry.get("init_pos", [0, 0, 0]), dtype=float)
+        rot = np.asarray(entry.get("init_rotmat", np.eye(3)), dtype=float).reshape(3, 3)
+        staging[pid] = (pos, rot)
+        if entry.get("arm_choice") is not None:
+            arm_choice[pid] = entry.get("arm_choice")
+        if entry.get("pose_tag") is not None:
+            pose_tag[pid] = entry.get("pose_tag")
+        if entry.get("rot_name") is not None:
+            rot_name[pid] = entry.get("rot_name")
+
+        rec = per_step.get(pid) or {}
+        gids = [int(g) for g in (rec.get("gids") or [])]
+        if gids and pid in searcher.world_poses:
+            gp, gr = searcher.world_poses[pid]
+            grasp_witness[pid] = {
+                "certification_level": "L2_executor_confirmed",
+                "source": str(rec.get("witness_source", "bsfs_finalcert")),
+                "arm": str(rec.get("arm", entry.get("arm_choice", ""))),
+                "gids": gids,
+                "preferred_gid": int(rec.get("preferred_gid", gids[0])),
+                "rot_name": str(rec.get("rot_name", entry.get("rot_name", ""))),
+                "staging_pos": pos.tolist(),
+                "staging_rotmat": rot.tolist(),
+                "goal_pos": np.asarray(gp, dtype=float).tolist(),
+                "goal_rotmat": np.asarray(gr, dtype=float).tolist(),
+            }
+
+    # Preserve preassembled semantics for the executor.
+    if preassembled_pid:
+        arm_choice[preassembled_pid] = "preassembled"
+        pose_tag.setdefault(preassembled_pid, "preassembled_goal")
+
+    ws = WorkspaceLayout(
+        robot_base_pos=np.asarray(getattr(searcher, "robot_base_pos", np.zeros(3)), dtype=float),
+        robot_base_rotmat=np.asarray(getattr(searcher, "robot_base_rotmat", np.eye(3)), dtype=float),
+        staging_positions=staging,
+        assembly_station_pos=np.asarray(best["assembly_center"], dtype=float),
+        assembly_station_rotmat=np.asarray(getattr(searcher, "fixture_rotmat", np.eye(3)), dtype=float),
+        name=os.path.splitext(os.path.basename(layout_path))[0],
+        metadata={
+            "search_method": best.get("method", "BSFS"),
+            "witness_status": best.get("witness_status"),
+            "part_order": list(searcher.part_order),
+            "preassemble_first_part": bool(getattr(searcher, "preassemble_first_part", False)),
+            "arm_choice": arm_choice,
+            "pose_tag": pose_tag,
+            "rot_name": rot_name,
+            "grasp_witness": grasp_witness,
+            "grasp_witness_policy": "prefer saved gids; revalidate; full-library fallback on failure",
+        },
+    )
+    ws.save(layout_path)
+    print(f"[9/9] saved executable layout -> {layout_path}")
+    return layout_path
 
 
 # ==================================================================
@@ -887,6 +998,27 @@ def main(argv=None):
 
     # per-step certification + grasp-robustness on the exact final poses
     per_step = _final_certification(searcher, args, final_assign, center, preassembled_pid)
+    # Final poses must have a fresh, executor-confirmed L2 witness. Do not report SUCCESS with a
+    # stale/failed per-step certification.
+    final_cert_fail = [
+        pid for pid, rec in per_step.items()
+        if pid != preassembled_pid and not bool(rec.get("certified", False))
+    ]
+    if final_cert_fail:
+        print(f"FINAL: FAIL (final per-step L2 witness failed for {final_cert_fail})")
+        raise SystemExit("Final per-step L2 witness failed.")
+
+    # Push the fresh witness back into final_assign so every downstream artifact (.json/.layout/L3)
+    # references the exact same original grasp ids.
+    for pid, rec in per_step.items():
+        if not rec.get("certified", False) or pid not in final_assign:
+            continue
+        final_assign[pid]["gids"] = [int(g) for g in (rec.get("gids") or [])]
+        final_assign[pid]["preferred_gid"] = rec.get("preferred_gid")
+        final_assign[pid]["witness_source"] = rec.get("witness_source", "finalcert")
+        final_assign[pid]["arm"] = rec.get("arm")
+        final_assign[pid]["common_grasp_count"] = rec.get("common_grasp_count")
+
     grasp_counts = {}
     for pid, entry in best["best_layout"].items():
         r = per_step.get(pid)
@@ -954,6 +1086,11 @@ def main(argv=None):
         "per_step_certification": per_step,
         **best,
     }
+    companion_layout = _save_companion_layout(
+        searcher, result, per_step, preassembled_pid, args.output_json)
+    if companion_layout:
+        result["layout_path"] = companion_layout
+
     text = json.dumps(result, ensure_ascii=False, indent=2)
     if args.output_json:
         os.makedirs(os.path.dirname(os.path.abspath(args.output_json)) or ".", exist_ok=True)

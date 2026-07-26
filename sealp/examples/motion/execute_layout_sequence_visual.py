@@ -139,7 +139,7 @@ DEFAULT_CONFIG = os.path.join(SEALP_ROOT, "config", "sample_config.yaml")
 DEFAULT_GRASP_DIR = os.path.join(SEALP_ROOT, "examples", "grasp", "tower_grasp")
 DEFAULT_HANDOVER_DIR = os.path.join(SEALP_ROOT, "examples", "grasp", "tower_handover")
 DEFAULT_MOTION_CACHE_DIR = os.path.join(SEALP_ROOT, "examples", "motion", "_output")
-MOTION_CACHE_FORMAT_VERSION = "2.5-symmetry"
+MOTION_CACHE_FORMAT_VERSION = "2.6-l2-witness"
 
 # middle_plate 直接走换手，不走单臂 pick-place（默认关，见 --middle-plate-handover）
 HANDOVER_PART_IDS = frozenset({"middle_plate"})
@@ -1306,6 +1306,65 @@ def _load_json_map(text: str) -> Dict[str, str]:
     return dict(json.loads(text))
 
 
+
+def _subset_grasp_collection(gc: GraspCollection, gids: Sequence[int]):
+    """Build a temporary collection from ORIGINAL pickle gids; return (collection, gid_map)."""
+    valid: List[int] = []
+    for gid in gids or []:
+        try:
+            gi = int(gid)
+        except Exception:
+            continue
+        if 0 <= gi < len(gc) and gi not in valid:
+            valid.append(gi)
+    if not valid:
+        return None, []
+    return (
+        GraspCollection(
+            end_effector=getattr(gc, "end_effector", None),
+            grasp_list=[gc[gi] for gi in valid],
+        ),
+        valid,
+    )
+
+
+def _pose_matches_witness(layout: WorkspaceLayout, pid: str, witness: dict,
+                          pos_tol: float = 1e-5, rot_tol: float = 1e-5) -> bool:
+    """Reject stale witness ids if somebody edited the .layout pose after BSFS."""
+    st = layout.staging_positions.get(pid)
+    if st is None:
+        return False
+    try:
+        pos, rot = st
+        wpos = np.asarray(witness.get("staging_pos"), dtype=float).reshape(3)
+        wrot = np.asarray(witness.get("staging_rotmat"), dtype=float).reshape(3, 3)
+        return (np.linalg.norm(np.asarray(pos, dtype=float) - wpos) <= pos_tol and
+                np.allclose(np.asarray(rot, dtype=float), wrot, atol=rot_tol))
+    except Exception:
+        return False
+
+
+def _layout_grasp_witness(layout: WorkspaceLayout, pid: str) -> Optional[dict]:
+    meta = getattr(layout, "metadata", {}) or {}
+    raw = (meta.get("grasp_witness", {}) or {}).get(pid)
+    if not isinstance(raw, dict):
+        return None
+    gids = []
+    for g in raw.get("gids", []) or []:
+        try:
+            gids.append(int(g))
+        except Exception:
+            pass
+    if not gids:
+        return None
+    if not _pose_matches_witness(layout, pid, raw):
+        print(f"  [WITNESS/STALE] {pid}: saved gids ignored because staging pose changed.")
+        return None
+    out = dict(raw)
+    out["gids"] = gids
+    return out
+
+
 def _mating_dirs_or_default(asm: AssemblyDef, pid: str, goal_rotmat):
     """asmdef 声明的插入/撤离方向; 该步没有声明时回退到"从上方放下、向上撤离"。"""
     approach, depart = assembly_mating_dirs(asm, pid, goal_rotmat)
@@ -2346,12 +2405,11 @@ class LayoutSequenceVisualizer:
     def _try_plan_step(self, pid: str, placed: set):
         if pid not in self.staging_models:
             return None, f"{pid}: staging model missing"
-
         if pid not in self.world_poses:
             return None, f"{pid}: goal world pose missing"
 
-        gc = self.grasps.get(pid)
-        if gc is None or len(gc) == 0:
+        gc_full = self.grasps.get(pid)
+        if gc_full is None or len(gc_full) == 0:
             return None, f"{pid}: grasp collection missing or empty"
 
         if self._uses_handover_direct(pid):
@@ -2361,179 +2419,235 @@ class LayoutSequenceVisualizer:
         gp, gr = self.world_poses[pid]
 
         meta = getattr(self.layout, "metadata", {}) or {}
-        preferred_arm = (meta.get("arm_choice", {}) or {}).get(pid)
-        arm_order = _arm_try_order(pid, preferred_arm, single_arm=self.single_arm_mode)
+        witness = _layout_grasp_witness(self.layout, pid)
+        meta_arm = (meta.get("arm_choice", {}) or {}).get(pid)
+        witness_arm = str(witness.get("arm", "")) if witness else ""
+        preferred_arm = witness_arm if witness_arm in ("lft", "rgt") else meta_arm
+        normal_arm_order = _arm_try_order(
+            pid, preferred_arm, single_arm=self.single_arm_mode)
+
+        # Phase A reuses the exact original gids saved by BSFS/L2.
+        # Phase B is the safety net requested by the user: if the witness has become invalid
+        # under stricter L3/RRT semantics, search the full library rather than failing early.
+        grasp_phases = []
+        if witness is not None:
+            witness_gc, gid_map = _subset_grasp_collection(gc_full, witness["gids"])
+            if witness_gc is not None:
+                grasp_phases.append(("L2-witness", witness_gc, gid_map))
+                print(
+                    f"\n[WITNESS] pid={pid} source={witness.get('source')} "
+                    f"arm={preferred_arm} original_gids={gid_map}"
+                )
+        grasp_phases.append(("full-fallback", gc_full, None))
 
         last_err = ""
         if pid == self._last_assembly_pid:
             print(f"[PLAN] pid={pid} 为最后一件: 放置后不做 place_depart, 结束即 home。")
-        print(f"\n[PLAN] pid={pid}, preferred_arm={preferred_arm}, try_order={arm_order}")
+        print(f"\n[PLAN] pid={pid}, preferred_arm={preferred_arm}, try_order={normal_arm_order}")
 
         plan_candidates = _plan_candidates(
             self.asm, pid, gr, skip_place_depart=(pid == self._last_assembly_pid))
 
-        for arm_tag in arm_order:
-            arm = get_layout_arm(self.robot, arm_tag, single_arm=self.single_arm_mode)
-            transport = TransportPrimitive(arm)
+        # IMPORTANT ordering:
+        #   witness/asmdef -> witness/linear_free -> full/asmdef -> full/linear_free
+        # so an L2 witness is actually reused before any 500-grasp rescan.
+        for phase_name, gc, original_gid_map in grasp_phases:
+            phase_arm_order = list(normal_arm_order)
+            if phase_name == "L2-witness" and witness_arm in ("lft", "rgt"):
+                phase_arm_order = [witness_arm] + [a for a in phase_arm_order if a != witness_arm]
 
-            for motion_tag, motion_kwargs in plan_candidates:
-                # 每次尝试复制一个 moving object，避免失败污染 staging model
-                moving = make_collision_model(self.asm.model_path(pid), cdprim_type=self.cdprim_type)
-                moving.pos = obj_cm.pos.copy()
-                moving.rotmat = obj_cm.rotmat.copy()
-                moving._sealp_part_id = pid
-                moving._sealp_role = "moving_object"
+            if phase_name == "full-fallback" and witness is not None:
+                print(f"  [WITNESS/FALLBACK] pid={pid}: L2 witness motion failed; scanning full grasp library.")
 
-                # 运输阶段使用完整动态障碍；落位/插接校验才使用接触豁免障碍。
-                transit_obs = self._transit_obstacles(pid, placed)
-                placement_obs = self._placement_obstacles(pid, placed)
+            for arm_tag in phase_arm_order:
+                arm = get_layout_arm(self.robot, arm_tag, single_arm=self.single_arm_mode)
+                transport = TransportPrimitive(arm)
 
-                debug_free_part = str(getattr(self, "debug_free_part", "") or "").strip()
-                if debug_free_part and (debug_free_part == pid or debug_free_part.lower() == "all"):
-                    print(
-                        f"    [DEBUG/FREE-PART] {pid}: 强制清空 transit_obs 和 placement_obs。"
-                        "这只用于诊断 No common grasp 是否由障碍物造成，不建议保存缓存。"
-                    )
-                    transit_obs = []
-                    placement_obs = []
+                for motion_tag, motion_kwargs in plan_candidates:
+                    moving = make_collision_model(
+                        self.asm.model_path(pid), cdprim_type=self.cdprim_type)
+                    moving.pos = obj_cm.pos.copy()
+                    moving.rotmat = obj_cm.rotmat.copy()
+                    moving._sealp_part_id = pid
+                    moving._sealp_role = "moving_object"
 
-                self._maybe_debug_obstacles(pid, placed, transit_obs, placement_obs)
+                    transit_obs = self._transit_obstacles(pid, placed)
+                    placement_obs = self._placement_obstacles(pid, placed)
 
-                try:
-                    if motion_tag == LINEAR_FREE_TAG:
-                        # 无强制 Cartesian 直线段的单臂规划: 同一只手臂、同一个 grasp,
-                        # 以认证过的 q_pick/q_place 为锚点用 RRT 连接。全程单臂, 不换手,
-                        # 不中途放下; IK/关节限位/碰撞照旧严格检查。
-                        res = DirectTransportPrimitive(arm).plan(
-                            obj_cmodel=moving,
-                            grasp_collection=gc,
-                            goal_pose_list=[(np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))],
-                            obstacle_list=transit_obs,
-                            grasp_obstacle_list=placement_obs,
-                            **direct_transport_seating_kwargs(
-                                self.mating_parts(pid, placed), transit_obs),
-                            use_auto_symmetry=self.auto_symmetry,
-                            symmetry_rel_tol=self.symmetry_rel_tol,
-                            symmetry_abs_tol=self.symmetry_abs_tol,
-                            max_auto_symmetries=self.max_auto_symmetries,
-                            **motion_kwargs,
+                    debug_free_part = str(
+                        getattr(self, "debug_free_part", "") or "").strip()
+                    if debug_free_part and (
+                        debug_free_part == pid or debug_free_part.lower() == "all"
+                    ):
+                        print(
+                            f"    [DEBUG/FREE-PART] {pid}: 强制清空 transit_obs 和 placement_obs。"
+                            "这只用于诊断 No common grasp 是否由障碍物造成，不建议保存缓存。"
                         )
-                    else:
-                        try:
-                            res = transport.plan(
+                        transit_obs = []
+                        placement_obs = []
+
+                    self._maybe_debug_obstacles(
+                        pid, placed, transit_obs, placement_obs)
+
+                    phase_desc = (
+                        f"{phase_name} original_gids={original_gid_map}"
+                        if original_gid_map is not None else phase_name
+                    )
+                    print(
+                        f"    [GRASP-PHASE] {pid} arm={arm_tag} motion={motion_tag} "
+                        f"{phase_desc} n={len(gc)}"
+                    )
+
+                    try:
+                        if motion_tag == LINEAR_FREE_TAG:
+                            res = DirectTransportPrimitive(arm).plan(
                                 obj_cmodel=moving,
                                 grasp_collection=gc,
-                                goal_pose_list=[(np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))],
+                                goal_pose_list=[(
+                                    np.asarray(gp, dtype=float),
+                                    np.asarray(gr, dtype=float),
+                                )],
                                 obstacle_list=transit_obs,
                                 grasp_obstacle_list=placement_obs,
-                                approach_distance=APPROACH_DIST,
-                                depart_distance=PICK_DEPART_DIST,
-                                linear_granularity=LINEAR_GRANULARITY,
+                                **direct_transport_seating_kwargs(
+                                    self.mating_parts(pid, placed), transit_obs),
+                                use_auto_symmetry=self.auto_symmetry,
+                                symmetry_rel_tol=self.symmetry_rel_tol,
+                                symmetry_abs_tol=self.symmetry_abs_tol,
+                                max_auto_symmetries=self.max_auto_symmetries,
                                 **motion_kwargs,
                             )
-                        except TypeError:
-                            # 兼容旧版 TransportPrimitive.plan：没有 grasp_obstacle_list 时仍能运行。
-                            res = transport.plan(
-                                obj_cmodel=moving,
-                                grasp_collection=gc,
-                                goal_pose_list=[(np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))],
-                                obstacle_list=transit_obs,
-                                approach_distance=APPROACH_DIST,
-                                depart_distance=PICK_DEPART_DIST,
-                                linear_granularity=LINEAR_GRANULARITY,
-                                **motion_kwargs,
-                            )
-                except Exception as e:
-                    last_err = (
-                        f"{pid} {arm_tag} motion={motion_tag}: "
-                        f"exception {type(e).__name__}: {e!r}"
-                    )
-                    print(f"  [NO] {last_err}")
-                    continue
-
-                if not bool(getattr(res, "success", False)):
-                    msg = getattr(res, "error_msg", "") or "no valid plan"
-                    last_err = f"{pid} {arm_tag} motion={motion_tag}: {msg}"
-                    print(f"  [NO] {last_err}")
-                    continue
-
-                transport_md = getattr(res, "mot_data", None)
-                if transport_md is None:
-                    last_err = f"{pid} {arm_tag} motion={motion_tag}: success=True but mot_data missing"
-                    print(f"  [NO] {last_err}")
-                    continue
-
-                motion_segments = [transport_md]
-                end_jv = np.asarray(getattr(res, "end_jnt_values", HOME_JV), dtype=float)
-
-                # 最后一件必须把 TransportPrimitive 的自动撤离尾巴替换为明确的 HOME 路径。
-                if pid == self._last_assembly_pid:
-                    motion_segments, home_err = self._build_last_part_home_return(
-                        pid=pid,
-                        arm_tag=arm_tag,
-                        arm=arm,
-                        transport_md=transport_md,
-                        placed=placed,
-                    )
-                    if motion_segments is None:
-                        last_err = f"{pid} {arm_tag} motion={motion_tag}: {home_err}"
-                        print(f"  [NO/FINAL-HOME] {last_err}")
+                        else:
+                            try:
+                                res = transport.plan(
+                                    obj_cmodel=moving,
+                                    grasp_collection=gc,
+                                    goal_pose_list=[(
+                                        np.asarray(gp, dtype=float),
+                                        np.asarray(gr, dtype=float),
+                                    )],
+                                    obstacle_list=transit_obs,
+                                    grasp_obstacle_list=placement_obs,
+                                    approach_distance=APPROACH_DIST,
+                                    depart_distance=PICK_DEPART_DIST,
+                                    linear_granularity=LINEAR_GRANULARITY,
+                                    **motion_kwargs,
+                                )
+                            except TypeError:
+                                res = transport.plan(
+                                    obj_cmodel=moving,
+                                    grasp_collection=gc,
+                                    goal_pose_list=[(
+                                        np.asarray(gp, dtype=float),
+                                        np.asarray(gr, dtype=float),
+                                    )],
+                                    obstacle_list=transit_obs,
+                                    approach_distance=APPROACH_DIST,
+                                    depart_distance=PICK_DEPART_DIST,
+                                    linear_granularity=LINEAR_GRANULARITY,
+                                    **motion_kwargs,
+                                )
+                    except Exception as exc:
+                        last_err = (
+                            f"{pid} {arm_tag} phase={phase_name} motion={motion_tag}: "
+                            f"exception {type(exc).__name__}: {exc!r}"
+                        )
+                        print(f"  [NO] {last_err}")
                         continue
-                    end_jv = np.asarray(HOME_JV, dtype=float)
 
-                # 必须在对侧手臂 overlay 改写 cm_list 前抽取每段物体真实位姿。
-                obj_pose_per_segment: List[List[Optional[Tuple[np.ndarray, np.ndarray]]]] = []
-                for md in motion_segments:
-                    obj_pose_per_segment.append(
-                        _extract_obj_pose_per_frame(getattr(md, "mesh_list", []) or [])
-                    )
+                    if not bool(getattr(res, "success", False)):
+                        msg = getattr(res, "error_msg", "") or "no valid plan"
+                        last_err = (
+                            f"{pid} {arm_tag} phase={phase_name} "
+                            f"motion={motion_tag}: {msg}"
+                        )
+                        print(f"  [NO] {last_err}")
+                        continue
 
-                # 动画显示：可选地给每一段补上另一只静止手臂。
-                if self.dual_arm_overlay:
+                    transport_md = getattr(res, "mot_data", None)
+                    if transport_md is None:
+                        last_err = (
+                            f"{pid} {arm_tag} phase={phase_name} motion={motion_tag}: "
+                            "success=True but mot_data missing"
+                        )
+                        print(f"  [NO] {last_err}")
+                        continue
+
+                    motion_segments = [transport_md]
+                    end_jv = np.asarray(
+                        getattr(res, "end_jnt_values", HOME_JV), dtype=float)
+
+                    if pid == self._last_assembly_pid:
+                        motion_segments, home_err = self._build_last_part_home_return(
+                            pid=pid,
+                            arm_tag=arm_tag,
+                            arm=arm,
+                            transport_md=transport_md,
+                            placed=placed,
+                        )
+                        if motion_segments is None:
+                            last_err = (
+                                f"{pid} {arm_tag} phase={phase_name} "
+                                f"motion={motion_tag}: {home_err}"
+                            )
+                            print(f"  [NO/FINAL-HOME] {last_err}")
+                            continue
+                        end_jv = np.asarray(HOME_JV, dtype=float)
+
+                    obj_pose_per_segment = []
                     for md in motion_segments:
-                        _add_other_arm_to_motion_mesh_list(
-                            getattr(md, "mesh_list", []) or [],
-                            self.robot,
-                            active_arm_tag=arm_tag,
+                        obj_pose_per_segment.append(
+                            _extract_obj_pose_per_frame(
+                                getattr(md, "mesh_list", []) or [])
                         )
 
-                # 多段（最后一件 transport + HOME）合并为一个连续动画。
-                anim_md = (
-                    motion_segments[0]
-                    if len(motion_segments) == 1
-                    else _merge_motion_mesh_list(motion_segments)
-                )
+                    if self.dual_arm_overlay:
+                        for md in motion_segments:
+                            _add_other_arm_to_motion_mesh_list(
+                                getattr(md, "mesh_list", []) or [],
+                                self.robot,
+                                active_arm_tag=arm_tag,
+                            )
 
-                total_frames = sum(
-                    len(getattr(md, "mesh_list", []) or []) for md in motion_segments
-                )
-                print(
-                    f"  [OK] pid={pid:14s} arm={arm_tag} motion={motion_tag} "
-                    f"transit_obs={len(transit_obs)} placement_obs={len(placement_obs)} "
-                    f"segments={len(motion_segments)} frames={total_frames} "
-                    f"end={'HOME' if pid == self._last_assembly_pid else 'place/depart'}"
-                )
+                    anim_md = (
+                        motion_segments[0]
+                        if len(motion_segments) == 1
+                        else _merge_motion_mesh_list(motion_segments)
+                    )
+                    total_frames = sum(
+                        len(getattr(md, "mesh_list", []) or [])
+                        for md in motion_segments
+                    )
 
-                # 更新该臂末端状态；最后一件现在明确结束在 HOME_JV。
-                _goto_arm(arm, end_jv)
+                    if phase_name == "L2-witness":
+                        print(
+                            f"  [WITNESS/REUSED] pid={pid} arm={arm_tag} "
+                            f"gids={original_gid_map}"
+                        )
+                    print(
+                        f"  [OK] pid={pid:14s} arm={arm_tag} motion={motion_tag} "
+                        f"grasp_phase={phase_name} transit_obs={len(transit_obs)} "
+                        f"placement_obs={len(placement_obs)} segments={len(motion_segments)} "
+                        f"frames={total_frames} "
+                        f"end={'HOME' if pid == self._last_assembly_pid else 'place/depart'}"
+                    )
 
-                sm = StepMotion(
-                    step_id=-1,
-                    part_id=pid,
-                    arm_tag=arm_tag,
-                    motion_tag=(
-                        f"{motion_tag}_then_home"
-                        if pid == self._last_assembly_pid
-                        else motion_tag
-                    ),
-                    mot_data=anim_md,
-                    motion_segments=motion_segments,
-                    obj_pose_per_segment=obj_pose_per_segment,
-                )
-                return sm, ""
+                    _goto_arm(arm, end_jv)
+                    sm = StepMotion(
+                        step_id=-1,
+                        part_id=pid,
+                        arm_tag=arm_tag,
+                        motion_tag=(
+                            f"{motion_tag}_then_home"
+                            if pid == self._last_assembly_pid else motion_tag
+                        ),
+                        mot_data=anim_md,
+                        motion_segments=motion_segments,
+                        obj_pose_per_segment=obj_pose_per_segment,
+                    )
+                    return sm, ""
 
-        return None, last_err or f"{pid}: all arm/motion candidates failed"
-
+        return None, last_err or f"{pid}: all arm/motion/grasp phases failed"
     def _backup_robot_state(self):
         """备份机械臂状态。失败后恢复，避免失败尝试污染后续步骤。"""
         for arm in iter_layout_arms(self.robot, single_arm=self.single_arm_mode):

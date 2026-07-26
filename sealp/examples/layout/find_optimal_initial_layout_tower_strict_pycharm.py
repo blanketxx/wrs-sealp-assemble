@@ -277,7 +277,7 @@ DEFAULT_L3_OBSTACLE_MODE = "staging_aware"
 # middle_plate 这类大件在 L3 里的取放直线段/RRT 常因为过严而失败, 但实际执行没问题;
 # 跳过后仍把它当作已放置(计入后续零件的 step-aware 障碍), 只是不对它本身做 L3 运动验证,
 # 其余零件照常严格验证。
-DEFAULT_L3_SKIP_PARTS = "middle_plate"
+DEFAULT_L3_SKIP_PARTS = ""
 DEFAULT_ALLOW_L2_FALLBACK = True
 
 # 强制直线取放失败后, 允许改用"无强制 Cartesian 直线段"单臂规划的零件(逗号分隔, "*" = 全部)。
@@ -338,6 +338,13 @@ class LayoutCandidate:
     pose_tag: Dict[str, str] = field(default_factory=dict)
     rot_name: Dict[str, str] = field(default_factory=dict)
     arm_choice: Dict[str, str] = field(default_factory=dict)
+    # L2/common-grasp witness: original grasp ids that survived the final endpoint/local-motion checks.
+    # L3/execution treats these as a PRIORITY hint, never as an unconditional proof: it revalidates
+    # them first and falls back to the full grasp library if needed.
+    grasp_gids: Dict[str, List[int]] = field(default_factory=dict)
+    grasp_witness_source: Dict[str, str] = field(default_factory=dict)
+    # BSFS final/full witnesses set this True; ordinary broad L2 searches stay cheap.
+    require_executor_witness: bool = False
     # Optional: restrict evaluate_layout to a specific rotation candidate per part
     # (by rot_name). Used by the GA so the pose it scored in the proxy is exactly
     # the pose L2 verifies (avoids proxy/L2 pose mismatch).
@@ -2165,7 +2172,8 @@ class WeightedInitialLayoutSearcher:
         return {p for p in excl if p in placed}
 
     def _planner_obstacles(self, obs: List, current_pid: Optional[str] = None,
-                           placed: Optional[set] = None) -> List:
+                           placed: Optional[set] = None,
+                           mode_override: Optional[str] = None) -> List:
         """给 reason_common_gids 使用的 obstacle_list。
 
         mesh:          全部 triangles/mesh 碰撞。对本塔这种堆叠装配会被桌面 mesh +
@@ -2178,7 +2186,7 @@ class WeightedInitialLayoutSearcher:
                        mesh 那样被桌面/接触面误杀, 又能避免某个零件被周围 staging 件
                        包围、执行时根本抓不进去。
         """
-        mode = self.planner_obstacle_mode
+        mode = str(mode_override or self.planner_obstacle_mode)
         if mode == "none":
             return []
         if mode == "env_only":
@@ -2200,6 +2208,81 @@ class WeightedInitialLayoutSearcher:
                 out.append(o)  # 其它 weighted_goal + 全部 weighted_staging 都保留
             return out
         return obs
+
+
+    @staticmethod
+    def _subset_grasp_collection(gc: GraspCollection, gids: List[int]):
+        """Return (subset_gc, original_gid_map) without changing the on-disk grasp ids."""
+        valid = []
+        for gid in gids or []:
+            try:
+                gi = int(gid)
+            except Exception:
+                continue
+            if 0 <= gi < len(gc) and gi not in valid:
+                valid.append(gi)
+        if not valid:
+            return None, []
+        grasps = [gc[gi] for gi in valid]
+        return GraspCollection(
+            end_effector=getattr(gc, "end_effector", None),
+            grasp_list=grasps,
+        ), valid
+
+    def _reason_common_gids_preferred(
+        self,
+        planner: PickPlacePlanner,
+        gc: GraspCollection,
+        goal_pose_list,
+        obstacle_list: List,
+        preferred_gids: Optional[List[int]] = None,
+        *,
+        fallback_full: bool = True,
+    ) -> Tuple[List[int], str]:
+        """Revalidate a saved/L2 witness first, then fall back to the full library.
+
+        ``reason_common_gids`` returns indices relative to the collection passed to it.
+        For a subset collection we map them back to the ORIGINAL pickle gids, so the
+        witness remains stable across BSFS -> .layout -> L3/execution.
+        """
+        preferred = [int(g) for g in (preferred_gids or [])]
+        subset, gid_map = self._subset_grasp_collection(gc, preferred)
+        if subset is not None:
+            try:
+                self.robot.lft_arm  # keep attribute access deterministic across WRS wrappers
+            except Exception:
+                pass
+            try:
+                local = planner.reason_common_gids(
+                    grasp_collection=subset,
+                    goal_pose_list=goal_pose_list,
+                    obstacle_list=obstacle_list,
+                )
+            except Exception:
+                local = None
+            mapped = []
+            for j in list(local or []):
+                try:
+                    jj = int(j)
+                    if 0 <= jj < len(gid_map):
+                        mapped.append(int(gid_map[jj]))
+                except Exception:
+                    continue
+            if mapped:
+                return mapped, "preferred"
+
+        if not fallback_full:
+            return [], "preferred_failed"
+
+        try:
+            gids = planner.reason_common_gids(
+                grasp_collection=gc,
+                goal_pose_list=goal_pose_list,
+                obstacle_list=obstacle_list,
+            )
+        except Exception:
+            gids = None
+        return [int(g) for g in list(gids or [])], "full_fallback"
 
     def _l2_pick_direction_vectors(self) -> List[Tuple[str, np.ndarray]]:
         """L2 quick pick check 使用的候选撤离方向。
@@ -2592,14 +2675,19 @@ class WeightedInitialLayoutSearcher:
                         # only fixes the IK seed; the feasibility DEFINITION (collision
                         # / reachability / common-grasp checks) is unchanged.
                         arm.goto_given_conf(HOME_JV)
-                        gids = planner.reason_common_gids(
-                            grasp_collection=gc,
+                        _hint = list((getattr(layout, "grasp_gids", {}) or {}).get(pid, []) or [])
+                        gids, _hint_src = self._reason_common_gids_preferred(
+                            planner=planner,
+                            gc=gc,
                             goal_pose_list=[(sp, sr), (gp, gr)],
                             obstacle_list=planner_obs,
+                            preferred_gids=_hint,
+                            fallback_full=True,
                         )
                     except Exception:
                         fail_counter["reason_exception"] += 1
                         gids = []
+                        _hint_src = "exception"
 
                     # ---- 诊断: 桌面是否误杀该姿态的抓取(SEALP_TABLE_PROBE=部件名 打开) ----
                     # 对比三种障碍口径下该 (staging,goal) 姿态的 common grasp 数:
@@ -2739,6 +2827,39 @@ class WeightedInitialLayoutSearcher:
                         fail_counter["l2_pick_depart_motion"] += 1
                         continue
 
+                    # Optional L2-final executor bridge. Ordinary search candidates stay on
+                    # staging_aware for speed/recall. BSFS complete-layout witnesses set
+                    # ``require_executor_witness=True`` and are rechecked here with the exact
+                    # executor endpoint obstacle semantics before they can be saved.
+                    exec_src = "l2_search"
+                    exec_obs = planner_obs
+                    if bool(getattr(layout, "require_executor_witness", False)):
+                        exec_obs = self._planner_obstacles(
+                            obs, current_pid=pid, placed=placed,
+                            mode_override="executor_match",
+                        )
+                        arm.goto_given_conf(HOME_JV)
+                        gids_exec, exec_src = self._reason_common_gids_preferred(
+                            planner=planner,
+                            gc=gc,
+                            goal_pose_list=[(sp, sr), (gp, gr)],
+                            obstacle_list=exec_obs,
+                            preferred_gids=list(gids),
+                            fallback_full=True,
+                        )
+                        if not gids_exec:
+                            fail_counter["no_common_gids"] += 1
+                            continue
+                        if exec_src == "full_fallback" and set(gids_exec) != set(gids):
+                            arm.goto_given_conf(HOME_JV)
+                            gids_exec, depart_msg = self._l2_pick_depart_motion_gids(
+                                arm=arm, gc=gc, sp=sp, sr=sr, gids=list(gids_exec))
+                            if not gids_exec:
+                                fail_counter["l2_pick_depart_motion"] += 1
+                                continue
+                        gids = list(gids_exec)
+                        n = len(gids)
+
                     # 新增 L2 快速抓取运动检查：
                     # 对 middle_plate 等指定大件，进一步检查 pre-pick / pick / post-pick
                     # 三个位姿是否在当前动态障碍下仍有共同 grasp。
@@ -2753,7 +2874,7 @@ class WeightedInitialLayoutSearcher:
                         gids=list(gids),
                         sp=sp,
                         sr=sr,
-                        obs=obs,
+                        obs=exec_obs,
                     )
                     n = len(gids)
                     if n <= 0:
@@ -2793,7 +2914,7 @@ class WeightedInitialLayoutSearcher:
 
                     record = (
                         part_score, n, manip, dist, rot_ang,
-                        arm_tag, cand, sp.copy(),
+                        arm_tag, cand, sp.copy(), list(gids), str(exec_src),
                     )
                     if best_record is None or record[0] > best_record[0]:
                         best_record = record
@@ -2805,7 +2926,7 @@ class WeightedInitialLayoutSearcher:
                 layout.fail_reason = f"{pid}: all rotation/arm candidates failed; fail_counter={fail_counter}"
                 return False
 
-            part_score, n, manip, dist, rot_ang, arm_tag, cand, sp = best_record
+            part_score, n, manip, dist, rot_ang, arm_tag, cand, sp, best_gids, witness_src = best_record
 
             # commit 当前零件的最佳姿态
             self._apply_staging_pose(pid, layout.xy[pid], cand)
@@ -2815,6 +2936,8 @@ class WeightedInitialLayoutSearcher:
             layout.pose_tag[pid] = cand.tag
             layout.rot_name[pid] = cand.rot_name
             layout.arm_choice[pid] = arm_tag
+            layout.grasp_gids[pid] = [int(g) for g in best_gids]
+            layout.grasp_witness_source[pid] = str(witness_src)
             layout.grasp_counts[pid] = int(n)
             layout.topdown_counts[pid] = int(self.topdown_identity_counts.get(pid, 0))
             layout.per_part_dist[pid] = float(dist)
@@ -3060,16 +3183,45 @@ class WeightedInitialLayoutSearcher:
                 # _l3_plan_part 重写(heatmap_pso 等子类)。
                 self._l3_mating_parts = self._contact_exclusion_set(pid, placed)
 
-                # 单个零件的运动验证走可重写钩子，子类可对特定零件改用换手等，
-                # 使 L3 验证方式与真实执行(动画)一致。
-                ok = self._l3_plan_part(
-                    layout=layout, step_idx=step_idx, pid=pid, arm_tag=arm_tag,
-                    sp=sp, sr=sr, gp=gp, gr=gr, gc=gc, obs=obs,
-                    lft_transport=lft_transport, rgt_transport=rgt_transport,
-                    verbose=verbose, placement_obs=placement_obs,
-                )
+                # L3 witness reuse: use the L2/executor-confirmed grasp ids FIRST.
+                # If that small witness set cannot produce a full motion, reset the robot and
+                # fall back to the complete grasp library. This is both faster and more robust
+                # than blindly discarding the L2 witness or trusting it unconditionally.
+                witness_gids = list((getattr(layout, "grasp_gids", {}) or {}).get(pid, []) or [])
+                witness_gc, witness_map = self._subset_grasp_collection(gc, witness_gids)
+                phases = []
+                if witness_gc is not None:
+                    phases.append(("L2-witness", witness_gc, witness_map))
+                phases.append(("full-fallback", gc, None))
+
+                ok = False
+                phase_errors = []
+                for phase_name, phase_gc, gid_map in phases:
+                    if verbose:
+                        if gid_map is None:
+                            print(f"  [L3/GRASP] {pid}: phase={phase_name}, n={len(phase_gc)}")
+                        else:
+                            print(f"  [L3/GRASP] {pid}: phase={phase_name}, original_gids={gid_map}")
+                    ok = self._l3_plan_part(
+                        layout=layout, step_idx=step_idx, pid=pid, arm_tag=arm_tag,
+                        sp=sp, sr=sr, gp=gp, gr=gr, gc=phase_gc, obs=obs,
+                        lft_transport=lft_transport, rgt_transport=rgt_transport,
+                        verbose=verbose, placement_obs=placement_obs,
+                    )
+                    if ok:
+                        if verbose and phase_name == "L2-witness":
+                            print(f"  [L3/GRASP] {pid}: reused L2 witness successfully.")
+                        break
+                    phase_errors.append(str(getattr(layout, "l3_fail_reason", "")))
+                    if phase_name == "L2-witness":
+                        if verbose:
+                            print(f"  [L3/GRASP] {pid}: witness failed -> full grasp fallback.")
+                        _reset_robot_for_l3(self.robot, single_arm=self.single_arm_mode)
+
                 if not ok:
-                    return False  # fail_reason 已在钩子内写好
+                    if phase_errors:
+                        layout.l3_fail_reason = phase_errors[-1]
+                    return False
 
                 placed.add(pid)
                 if verbose:
@@ -3448,6 +3600,34 @@ class WeightedInitialLayoutSearcher:
     # 保存
     # --------------------------------------------------------
 
+
+    def _grasp_witness_metadata(self, layout: LayoutCandidate) -> Dict[str, Dict]:
+        """Self-contained L2 witness written into WorkspaceLayout.metadata."""
+        out: Dict[str, Dict] = {}
+        for pid, gids in (getattr(layout, "grasp_gids", {}) or {}).items():
+            if not gids or pid not in self.staging_models or pid not in self.world_poses:
+                continue
+            sp = np.asarray(self.staging_models[pid].pos, dtype=float)
+            sr = np.asarray(self.staging_models[pid].rotmat, dtype=float)
+            gp, gr = self.world_poses[pid]
+            out[pid] = {
+                "certification_level": (
+                    "L2_executor_confirmed"
+                    if bool(getattr(layout, "require_executor_witness", False))
+                    else "L2_search"
+                ),
+                "source": str((getattr(layout, "grasp_witness_source", {}) or {}).get(pid, "l2")),
+                "arm": str((getattr(layout, "arm_choice", {}) or {}).get(pid, "")),
+                "gids": [int(g) for g in gids],
+                "preferred_gid": int(gids[0]),
+                "rot_name": str((getattr(layout, "rot_name", {}) or {}).get(pid, "")),
+                "staging_pos": sp.tolist(),
+                "staging_rotmat": sr.tolist(),
+                "goal_pos": np.asarray(gp, dtype=float).tolist(),
+                "goal_rotmat": np.asarray(gr, dtype=float).tolist(),
+            }
+        return out
+
     def save_layout(self, layout: LayoutCandidate, output_dir: str) -> str:
         os.makedirs(output_dir, exist_ok=True)
         out_path = os.path.join(output_dir, f"{self.output_name}.layout")
@@ -3532,6 +3712,7 @@ class WeightedInitialLayoutSearcher:
                 "grasp_counts": dict(layout.grasp_counts),
                 "topdown_counts_identity": dict(layout.topdown_counts),
                 "arm_choice": dict(layout.arm_choice),
+                "grasp_witness": self._grasp_witness_metadata(layout),
                 "pose_tag": dict(layout.pose_tag),
                 "rot_name": dict(layout.rot_name),
                 "z_offsets": {k: float(v) for k, v in layout.z_offset.items()},
@@ -3741,7 +3922,7 @@ def _parse_args():
                              "executor_match: staging_aware + 桌面, 与执行脚本逐项一致(贴桌零件易误杀); "
                              "mesh 含桌面会过严。")
     parser.add_argument("--l3-skip-parts", default=DEFAULT_L3_SKIP_PARTS,
-                        help="L3 全流程验证时跳过运动规划的零件，逗号分隔，默认 middle_plate。"
+                        help="L3 全流程验证时跳过运动规划的零件，逗号分隔，默认空（不跳过）。"
                              "被跳过的零件仍计入后续零件的障碍(视为已放置)，只是不对它本身做 L3 验证。"
                              "传空字符串则不跳过任何零件。")
     parser.add_argument("--l3-linear-free-parts", default=DEFAULT_L3_LINEAR_FREE_PARTS,
