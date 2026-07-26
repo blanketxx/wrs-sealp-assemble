@@ -1448,15 +1448,19 @@ def _default_contact_exclusion_map(asm: AssemblyDef) -> Dict[str, List[str]]:
         这里主要放一些 asmdef parent 无法表达但几何上明显插接/承托的关系。
 
     对当前 tower：
-        - top_cross 竖着插入 middle_plate 顶面方孔，所以规划 top_cross 时要临时排除 middle_plate；
-        - middle_plate 与四根 post 的承托/孔位关系在 DirectTransportPrimitive 里用 triangle
-          mesh 分阶段检测，不再把 post 从 placement 障碍里整段删除。
+        - top_cross 竖着插入 middle_plate 顶面方孔 -> 规划 top_cross 时 placement 排除 middle_plate；
+        - middle_plate 落在四根 post 顶上 -> placement 排除四根 post（goal 抓取 IK）；
+          运输与 DirectTransport 落位仍保留 post 在 transit 中，并用 triangle mesh 防穿模。
     """
     part_ids = set(getattr(asm, "part_ids", []))
     out: Dict[str, List[str]] = {}
 
     if "top_cross" in part_ids and "middle_plate" in part_ids:
         out.setdefault("top_cross", []).append("middle_plate")
+
+    post_ids = [p for p in ("post_bl", "post_fl", "post_br", "post_fr") if p in part_ids]
+    if "middle_plate" in part_ids and post_ids:
+        out.setdefault("middle_plate", []).extend(post_ids)
 
     return out
 

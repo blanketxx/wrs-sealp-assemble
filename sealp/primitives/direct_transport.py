@@ -368,6 +368,8 @@ class DirectTransportPrimitive(MotionPrimitive):
                 gp, gr, grasp, strict_obs, mating_mesh_obs,
                 to_triangle_cdmesh(obj_cmodel), seed=q_pick) if phased_seating else self._ik_at(
                 gp, gr, grasp, place_obs, seed=q_pick)
+            if q_place is None:
+                continue
             out.append(_GraspCandidate(gid, grasp, q_pick, q_place))
         # Prefer grasps whose two configurations are closest in joint space: the arm has to
         # reorient the object the least, so the transport is easiest to connect.
