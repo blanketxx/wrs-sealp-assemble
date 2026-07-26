@@ -56,6 +56,57 @@ yaml.add_representer(float, _float_representer)
 
 FORMAT_VERSION = "1.0"
 
+# sealp/ package root and repo root (…/sealp, …/wrs-sealp-assemble)
+_SEALP_ROOT = Path(__file__).resolve().parents[1]
+_PROJECT_ROOT = _SEALP_ROOT.parent
+
+
+def _resolve_stored_model_path(stored: str) -> str:
+    """Map a path recorded on another machine (e.g. Windows) onto this checkout.
+
+    ``.asmdef`` files often embed absolute Windows paths like
+    ``D:\\Project\\wrs-sealp\\sealp\\assets\\...``.  On Linux those files do not
+    exist, so staging/goal/carry visuals silently disappear.  Prefer any
+    candidate that exists on disk; fall back to the original string.
+    """
+    if not stored:
+        return stored
+
+    raw = str(stored)
+    candidates = [raw, raw.replace("\\", os.sep).replace("/", os.sep)]
+
+    normalized = raw.replace("\\", "/")
+    marker = "/sealp/"
+    idx = normalized.lower().find(marker)
+    if idx >= 0:
+        relative = normalized[idx + 1:]  # "sealp/assets/..."
+        parts = relative.split("/")
+        candidates.append(str(_PROJECT_ROOT.joinpath(*parts)))
+        # Also try relative to cwd (when launched from repo root).
+        candidates.append(str(Path.cwd().joinpath(*parts)))
+
+    # Basename-only fallback under the canonical Toy / assets trees.
+    basename = os.path.basename(normalized)
+    if basename:
+        for root in (
+            _SEALP_ROOT / "assets" / "models",
+            _PROJECT_ROOT / "sealp" / "assets" / "models",
+        ):
+            if root.is_dir():
+                hit = next(root.rglob(basename), None)
+                if hit is not None:
+                    candidates.append(str(hit))
+
+    seen = set()
+    for cand in candidates:
+        abs_cand = os.path.abspath(cand)
+        if abs_cand in seen:
+            continue
+        seen.add(abs_cand)
+        if os.path.isfile(abs_cand):
+            return abs_cand
+    return raw
+
 
 # ══════════════════════════════════════════════════════════════
 #  Data classes
@@ -246,9 +297,13 @@ class AssemblyDef:
         return list(self._parts.keys())
 
     def model_path(self, part_id: str) -> str:
-        """Return the absolute model path for a part."""
+        """Return the absolute model path for a part (resolved to this machine)."""
         part = self._parts[part_id]
-        return self.models[part.model]
+        stored = self.models[part.model]
+        resolved = _resolve_stored_model_path(stored)
+        if resolved != stored:
+            self.models[part.model] = resolved
+        return resolved
 
     # ── Step management ──────────────────────────────────────
     def add_step(self, step: StepDef):
@@ -461,7 +516,7 @@ class AssemblyDef:
 
         for alias, mdata in d.get("models", {}).items():
             path = mdata["path"] if isinstance(mdata, dict) else mdata
-            asm.models[alias] = path
+            asm.models[alias] = _resolve_stored_model_path(path)
 
         # Parts must be added after models
         for pid, pdata in d.get("parts", {}).items():

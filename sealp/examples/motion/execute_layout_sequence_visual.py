@@ -998,6 +998,11 @@ def _attach_object_at_pose_to_frame(
         return
     mesh_path = asm.model_path(part_id)
     if not mesh_path or not os.path.isfile(mesh_path):
+        # 不静默失败：缺 STL 时零件不会跟夹爪走，表现为“只有臂和桌子”。
+        print(
+            f"[WARN] 无法贴零件到动画帧: part={part_id!r} "
+            f"mesh 不存在: {mesh_path!r}"
+        )
         return
 
     try:
@@ -1007,8 +1012,11 @@ def _attach_object_at_pose_to_frame(
         obj._sealp_part_id = part_id
         obj._sealp_role = "cached_moving_object_visual"
         obj.attach_to(frame)
-    except Exception:
-        pass
+    except Exception as e:
+        print(
+            f"[WARN] 贴零件到动画帧失败: part={part_id!r} "
+            f"{type(e).__name__}: {e}"
+        )
 
 
 def _attach_interpolated_object_to_frame(
@@ -1500,6 +1508,7 @@ def attach_staging_visuals(base, asm, layout, part_order, cdprim_type: str):
 
     vis = {}
     print("\n========== 初始 staging 彩色显示 ==========")
+    missing = []
     for i, pid in enumerate(part_order):
         st = layout.staging_positions.get(pid)
         if st is None:
@@ -1507,6 +1516,7 @@ def attach_staging_visuals(base, asm, layout, part_order, cdprim_type: str):
         pos, rot = st
         mp = asm.model_path(pid)
         if not os.path.isfile(mp):
+            missing.append((pid, mp))
             continue
 
         cm = make_collision_model(mp, cdprim_type=cdprim_type)
@@ -1517,6 +1527,13 @@ def attach_staging_visuals(base, asm, layout, part_order, cdprim_type: str):
         mgm.gen_frame(pos=pos, rotmat=rot, ax_length=0.035).attach_to(base)
         vis[pid] = cm
         print(f"{pid:14s}: pos={np.round(pos, 4).tolist()}")
+
+    if missing:
+        print(f"[WARN] {len(missing)} 个零件 STL 找不到，staging/跟随夹爪都会缺失:")
+        for pid, mp in missing:
+            print(f"  {pid:14s}: {mp}")
+    elif not vis:
+        print("[WARN] 没有可显示的 staging 零件（layout staging 为空或 part_order 不匹配）。")
 
     return vis
 
@@ -2991,8 +3008,22 @@ def _rebuild_mot_data_from_segments(
         start_pose = (np.asarray(st_model.pos, dtype=float), np.asarray(st_model.rotmat, dtype=float))
     else:
         st = runner.layout.staging_positions.get(part_id)
+        if st is None:
+            # 常见原因: bash 用了反引号导致 --layout 没传进去，默认 layout 与 pkl 零件不一致。
+            layout_pids = sorted(runner.layout.staging_positions.keys())
+            raise ValueError(
+                f"缓存步骤 part_id={part_id!r} 在当前 layout 的 staging 中不存在。"
+                f" layout_staging={layout_pids}。"
+                f" 请确认 --layout 指向与该 pkl 匹配的 .layout"
+                f"（bash 换行请用 \\，不要用反引号 `）。"
+            )
         start_pose = (np.asarray(st[0], dtype=float), np.asarray(st[1], dtype=float))
 
+    if part_id not in runner.world_poses:
+        raise ValueError(
+            f"缓存步骤 part_id={part_id!r} 在当前 asmdef/layout 的 goal poses 中不存在。"
+            f" 请确认 --asmdef/--layout 与 motion cache 匹配。"
+        )
     gp, gr = runner.world_poses[part_id]
     goal_pose = (np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))
 
