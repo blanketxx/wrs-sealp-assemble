@@ -89,6 +89,7 @@ from sealp.layout import WorkspaceLayout
 from sealp.layout.dual_staging_search import find_obstacle_def
 from sealp.primitives.transport import TransportPrimitive
 from sealp.primitives.direct_transport import DirectTransportPrimitive
+from sealp.assembly_sequence.mating_axis import assembly_mating_dirs
 from sealp.assembly_sequence.mating_detection import MatingCache
 from sealp.primitives.seating_collision import direct_transport_seating_kwargs
 from sealp.primitives.regrasp import SingleArmRegraspPrimitive
@@ -3084,84 +3085,8 @@ class WeightedInitialLayoutSearcher:
             _reset_robot_for_l3(self.robot, single_arm=self.single_arm_mode)
 
     def _assembly_mating_dirs(self, pid: str, gr: np.ndarray):
-        """L3/RRT 阶段该零件的插入(place-approach)/撤离(place-depart)方向。
-
-        统一的符号约定
-        --------------
-            approach = d_insert  = 零件被送入父件时末端平移的世界方向;
-            depart   = -d_insert = 装配完成后沿反方向退出。
-
-        按优先级(高->低)确定 d_insert:
-
-          1) 显式 ``insertion_axis`` (asmdef 中该步给定的**世界坐标系**插接轴):
-                 d_insert = normalize(insertion_axis)   # 直接使用, 不做坐标变换
-             约定: ``insertion_axis`` 就是"零件被插入时末端平移的世界方向"
-             (place-approach 世界方向)。例如 ``[0,0,1]`` 表示沿世界 +Z 插入,
-             撤离/抬升沿 ``-Z``。
-          1') 兼容旧字段 ``insertion_axis_local`` (零件目标局部坐标系):
-                 d_insert = normalize(gr @ insertion_axis_local)
-          2) 推断的子件局部 +Z 轴: axis = gr[:, 2]; 由 ``rel_pos`` 在该轴上的
-             投影符号确定零件坐落在父件哪一侧, 从该侧沿 ``-axis`` 插入。
-             投影≈0(偏移垂直于轴)时回退为"从上方(-世界Z)接近"。
-          3) 调用方回退到固定 world -Z/+Z (返回 None)。
-
-        注意: 主插接轴不从 staging->goal 运输方向推断。
-
-        :return: (approach_dir, depart_dir) 单位向量; 无法确定时返回 (None, None)。
-        """
-        step = None
-        for s in getattr(self.asm, "steps", []):
-            if getattr(s, "part_id", None) == pid:
-                step = s
-                break
-        if step is None:
-            return None, None
-        try:
-            gr = np.asarray(gr, dtype=float).reshape(3, 3)
-
-            # ---- priority 1: explicit WORLD-frame insertion_axis ----
-            # 直接作为世界方向使用, 不经 R_goal 变换。
-            d_world = getattr(step, "insertion_axis", None)
-            if d_world is not None:
-                d_world = np.asarray(d_world, dtype=float).reshape(3)
-                n = float(np.linalg.norm(d_world))
-                if n >= 1e-9:
-                    d_insert = d_world / n
-                    return d_insert, -d_insert
-
-            # ---- priority 1': legacy LOCAL-frame insertion_axis_local ----
-            d_local = getattr(step, "insertion_axis_local", None)
-            if d_local is not None:
-                d_local = np.asarray(d_local, dtype=float).reshape(3)
-                if float(np.linalg.norm(d_local)) >= 1e-9:
-                    d_insert = gr @ d_local
-                    n = float(np.linalg.norm(d_insert))
-                    if n >= 1e-9:
-                        d_insert = d_insert / n
-                        return d_insert, -d_insert
-
-            # ---- priority 2: inferred child local +Z axis ----
-            axis = gr[:, 2].astype(float)
-            n = float(np.linalg.norm(axis))
-            if n < 1e-9:
-                return None, None
-            axis = axis / n
-            # 父件世界姿态: parent_rot = gr @ rel_rotmat^T
-            rel_rot = np.asarray(step.rel_rotmat, dtype=float).reshape(3, 3)
-            rel_pos = np.asarray(step.rel_pos, dtype=float).reshape(3)
-            parent_rot = gr @ rel_rot.T
-            rel_pos_world = parent_rot @ rel_pos
-            d = float(np.dot(rel_pos_world, axis))
-            if abs(d) < 1e-6:
-                # 偏移垂直于装配轴: 默认从上方接近(approach 的世界 Z 分量 <= 0)
-                approach = axis if axis[2] < 0 else -axis
-            else:
-                sgn = 1.0 if d > 0 else -1.0
-                approach = -sgn * axis
-            return approach, -approach
-        except Exception:
-            # ---- priority 3: caller falls back to fixed world -Z/+Z ----
-            return None, None
+        """该零件的插入(place-approach)/撤离(place-depart)方向, 见 ``assembly_mating_dirs``。"""
+        return assembly_mating_dirs(self.asm, pid, gr)
 
     def _l3_plan_part(self, layout, step_idx, pid, arm_tag, sp, sr, gp, gr, gc, obs,
                       lft_transport, rgt_transport, verbose=True, placement_obs=None) -> bool:

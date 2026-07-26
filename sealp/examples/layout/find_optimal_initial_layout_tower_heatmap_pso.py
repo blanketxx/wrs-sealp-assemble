@@ -80,6 +80,7 @@ from find_optimal_initial_layout_tower_strict import (
 
 # 换手验证(L3 与动画执行对齐): middle_plate 在动画里走双臂换手, L3 也用换手验证。
 import wrs.manipulation.handover_regrasp as horeg
+from sealp.assembly_sequence.mating_axis import assembly_mating_dirs
 
 # L3 里用换手(而非单臂)验证的零件。
 # 默认【空】= 全部单臂: 之前观察到 middle_plate 的"换手"其实退化成单臂(同一抓取在
@@ -169,18 +170,11 @@ _CFG = {
 # L3 落位验证: 与 execute_layout_sequence_visual 同口径的运动参数
 #   (这样 l3_pass=true 的布局, 动画端用同样的多方向+两臂尝试一定能跑通)
 # ============================================================
-L3_MOTION_TILT = 0.35
 L3_APPROACH_DIST = 0.0
 L3_PICK_DEPART_DIST = 0.02
 L3_PLACE_APPROACH_DIST = 0.02
 L3_PLACE_DEPART_DIST = 0.05
 L3_LINEAR_GRANULARITY = 0.04
-
-# 免直线落位件(与 execute_layout_sequence_visual.NOLINEAR_PART_IDS 对齐):
-# 这些件被周围已装件包围, 标准直线 approach/depart 必撞。L3 验证时把直线段距离
-# 全设 0 → 退化成"只在抓取位做一次 IK", 取放间仍走 RRT 绕障。这样单臂也能放进去,
-# 且 l3_pass=true 的布局, 动画端用同样的免直线单臂一定能跑通。
-NOLINEAR_PART_IDS = frozenset({"middle_plate"})
 
 
 def _l3_unit_vec(v) -> np.ndarray:
@@ -189,40 +183,27 @@ def _l3_unit_vec(v) -> np.ndarray:
     return v / n if n > 1e-9 else v
 
 
-def _l3_motion_candidate_kwargs(arm_tag: str, pid: str = ""):
-    """与 execute_layout_sequence_visual._motion_candidate_kwargs 完全一致:
-    先试纯 Z, 再试带水平偏置的 4 个方向; 左右臂顺序不同。
-    pid 属于 NOLINEAR_PART_IDS 时, 直线 approach/depart 距离全置 0(免直线落位)。"""
-    t = float(L3_MOTION_TILT)
-    specs = {
-        "z":       ([0, 0, 1],  [0, 0, -1],  [0, 0, 1]),
-        "x_plus":  ([t, 0, 1],  [-t, 0, -1], [t, 0, 1]),
-        "x_minus": ([-t, 0, 1], [t, 0, -1],  [-t, 0, 1]),
-        "y_plus":  ([0, t, 1],  [0, -t, -1], [0, t, 1]),
-        "y_minus": ([0, -t, 1], [0, t, -1],  [0, -t, 1]),
-    }
-    if arm_tag == "rgt":
-        order = ["z", "y_minus", "x_plus", "x_minus", "y_plus"]
+def _l3_motion_candidate_kwargs(asm, pid: str, goal_rotmat):
+    """与 execute_layout_sequence_visual._plan_candidates 同口径: 只试装配定义的插接轴。
+
+    以前这里跟执行脚本一样轮流试纯 Z 和四个水平偏置方向。那些方向是凭空猜的世界方向,
+    与装配体如何装配无关, 每个失败方向都要把整套 grasp 的直线段 IK 重算一遍。asmdef 已经
+    写明了插接轴, 只试它即可; 该步没声明时回退到"从上方放下、向上撤离"。
+    """
+    approach, depart = assembly_mating_dirs(asm, pid, goal_rotmat)
+    if approach is None or depart is None:
+        approach, depart = _l3_unit_vec([0, 0, -1]), _l3_unit_vec([0, 0, 1])
+        tag = "topdown_default"
     else:
-        order = ["z", "y_plus", "x_minus", "x_plus", "y_minus"]
-
-    no_linear = pid in NOLINEAR_PART_IDS
-    pick_dep_d = 0.0 if no_linear else L3_PICK_DEPART_DIST
-    place_app_d = 0.0 if no_linear else L3_PLACE_APPROACH_DIST
-    place_dep_d = 0.0 if no_linear else L3_PLACE_DEPART_DIST
-
-    out = []
-    for name in order:
-        pd, pa, pld = specs[name]
-        out.append((name, dict(
-            pick_depart_direction=_l3_unit_vec(pd),
-            pick_depart_distance=pick_dep_d,
-            place_approach_direction_list=[_l3_unit_vec(pa)],
-            place_approach_distance_list=[place_app_d],
-            place_depart_direction_list=[_l3_unit_vec(pld)],
-            place_depart_distance_list=[place_dep_d],
-        )))
-    return out
+        tag = "asmdef_axis"
+    return [(tag, dict(
+        pick_depart_direction=_l3_unit_vec([0, 0, 1]),
+        pick_depart_distance=L3_PICK_DEPART_DIST,
+        place_approach_direction_list=[_l3_unit_vec(approach)],
+        place_approach_distance_list=[L3_PLACE_APPROACH_DIST],
+        place_depart_direction_list=[_l3_unit_vec(depart)],
+        place_depart_distance_list=[L3_PLACE_DEPART_DIST],
+    ))]
 
 
 # ============================================================
@@ -691,14 +672,13 @@ class HeatmapPSOSearcher(fast.FastWeightedInitialLayoutSearcher):
                       lft_transport, rgt_transport, verbose=True, placement_obs=None) -> bool:
         """重写父类钩子: 用与 execute_layout_sequence_visual 完全相同的方式验证落位。
 
-        关键: 父类默认只试【单方向 + 指定臂】, 比动画(5 方向 × 两臂)更严, 会误杀
-        动画其实能跑通的布局。这里改成同口径:
+        关键: 父类默认只试【指定臂】, 比动画(两臂)更严, 会误杀动画其实能跑通的布局。
+        这里改成同口径:
             - preferred 臂 + 另一只臂;
-            - 每只臂试 z / x± / y± 共 5 套 pick/place 接近撤离方向;
+            - 每只臂沿 asmdef 声明的插接轴做一次强制直线取放;
             - place approach 距离 0.02(与动画一致, 比父类 0.05 短, 更贴近实际);
-            - 任一(臂,方向)组合规划成功即判通过。
-        这样 l3_pass=true ⟺ 动画端能放下, 真正做到"搜索结果保证动画跑通"+
-        "姿态/位置/抓取自动筛选(不写死)"。
+            - 任一手臂规划成功即判通过。
+        动画端在这之后还有一层无强制直线段的兜底, 所以这里通过的布局动画端一定能跑通。
 
         L3_HANDOVER_PART_IDS 里的零件(默认空)仍走换手验证。
         """
@@ -717,7 +697,7 @@ class HeatmapPSOSearcher(fast.FastWeightedInitialLayoutSearcher):
 
         for at in arm_order:
             transport = rgt_transport if at == "rgt" else lft_transport
-            for motion_tag, mk in _l3_motion_candidate_kwargs(at, pid):
+            for motion_tag, mk in _l3_motion_candidate_kwargs(self.asm, pid, gr_a):
                 obj_cm = fol.make_collision_model(self.asm.model_path(pid),
                                                   cdprim_type=self.cdprim_type)
                 obj_cm.pos = np.asarray(sp, dtype=float).copy()

@@ -42,6 +42,7 @@
    - 强制重算：--replan
    - 直接读缓存(不重规划)：不加 --replan；即使 fingerprint 变了也会回放已有 pkl
    - 若需旧行为(fingerprint 不匹配就拒绝缓存)：加 --strict-cache
+   - 动画默认每按一次 SPACE 推进 2 帧（--anime-stride），且只渲染当前帧
 
 推荐放置路径：
     sealp/examples/motion/execute_layout_sequence_visual.py
@@ -118,6 +119,7 @@ from sealp.layout.layout_robot_factory import (
 )
 from sealp.primitives.transport import TransportPrimitive
 from sealp.primitives.direct_transport import DirectTransportPrimitive
+from sealp.assembly_sequence.mating_axis import assembly_mating_dirs
 from sealp.assembly_sequence.mating_detection import MatingCache
 from sealp.primitives.seating_collision import direct_transport_seating_kwargs
 from wrs.grasping.grasp import GraspCollection
@@ -142,14 +144,12 @@ MOTION_CACHE_FORMAT_VERSION = "2.4"
 # middle_plate 直接走换手，不走单臂 pick-place（默认关，见 --middle-plate-handover）
 HANDOVER_PART_IDS = frozenset({"middle_plate"})
 
-# 允许走"无强制 Cartesian 直线段"单臂规划的零件。这些件被周围已装件(如四根立柱)包围,
-# 标准 pick-place 强制生成的直线 approach/depart 要求沿线每个插值位姿都有 IK, middle_plate
-# 的所有共同抓取都死在 `IK not solvable in gen_linear_motion` 上。把距离缩到 0 治不了根:
-# distance=0 时 start_tcp_pos == goal_tcp_pos, gen_linear_motion 仍会被调用并重解 IK。
+# 无强制 Cartesian 直线段的单臂规划。标准 pick-place 强制生成的直线 approach/depart 要求
+# 沿线每个插值位姿都有 IK; 被已装件包围的零件(如落在四根立柱上的板)所有共同抓取都死在
+# `IK not solvable in gen_linear_motion` 上。把距离缩到 0 治不了根: distance=0 时
+# start_tcp_pos == goal_tcp_pos, gen_linear_motion 仍会被调用并重解 IK。
 # DirectTransportPrimitive 以认证过的 q_pick/q_place 为锚点用 RRT 连接, 全程单臂同一个
-# grasp, 不换手也不中途放下 —— 与之前换手路径里 toggle_start_approach/end_depart=False
-# 实际走出来的那条单臂轨迹同口径。
-NOLINEAR_PART_IDS = frozenset({"middle_plate"})
+# grasp, 不换手也不中途放下。
 LINEAR_FREE_TAG = "linear_free"
 
 
@@ -165,9 +165,6 @@ PICK_DEPART_DIST = 0.03
 PLACE_APPROACH_DIST = 0.03
 PLACE_DEPART_DIST = 0.03
 LINEAR_GRANULARITY = 0.04
-
-# 多方向候选的水平倾斜量
-MOTION_TILT = 0.35
 
 # RRT 稀疏化，不降低障碍物要求，只降低搜索开销
 RRT_EXT_DIST = 0.30
@@ -607,10 +604,25 @@ class _LazyCachedMeshList:
             old_idx = self._order.pop(0)
             old_frame = self._cache.pop(old_idx, None)
             if old_frame is not frame:
-                try:
-                    old_frame.detach()
-                except Exception:
-                    pass
+                _hard_release_mesh(old_frame)
+
+    def release_index(self, idx: int) -> None:
+        """Drop one cached frame and detach it from the scene (no render accumulation)."""
+        if idx is None:
+            return
+        old_frame = self._cache.pop(int(idx), None)
+        if old_frame is not None:
+            _hard_release_mesh(old_frame)
+        try:
+            self._order.remove(int(idx))
+        except ValueError:
+            pass
+
+    def release_all(self) -> None:
+        for idx in list(self._order):
+            self.release_index(idx)
+        self._cache.clear()
+        self._order.clear()
 
     def __getitem__(self, idx):
         if isinstance(idx, slice):
@@ -1294,72 +1306,51 @@ def _load_json_map(text: str) -> Dict[str, str]:
     return dict(json.loads(text))
 
 
-def _motion_candidate_kwargs(pid: str, arm_tag: str, *, skip_place_depart: bool = False):
-    """多套 pick/place 接近撤离方向候选。
+def _mating_dirs_or_default(asm: AssemblyDef, pid: str, goal_rotmat):
+    """asmdef 声明的插入/撤离方向; 该步没有声明时回退到"从上方放下、向上撤离"。"""
+    approach, depart = assembly_mating_dirs(asm, pid, goal_rotmat)
+    if approach is None or depart is None:
+        return _unit_vec([0, 0, -1]), _unit_vec([0, 0, 1]), False
+    return _unit_vec(approach), _unit_vec(depart), True
 
-    先试纯 Z，再试带一点水平偏置的方向。
-    skip_place_depart: 最后一件(如 top_cross)放置后不再做 place_depart 撤离段,
-    避免 pkl/动画末尾出现一段多余的"类似 middle_plate 附近"的关节角。
+
+def _motion_candidate_kwargs(place_approach_dir, place_depart_dir, *,
+                             skip_place_depart: bool = False) -> Dict:
+    """唯一一套强制 Cartesian 直线段参数: 沿装配定义的插接轴放下、沿反方向撤离。
+
+    pick_depart 与插接轴无关(那只是把零件从暂存台面抬起来), 固定用世界 +Z。
+    skip_place_depart: 最后一件放置后不再做 place_depart 撤离段, 避免 pkl/动画末尾多出
+    一段无意义的关节角。
     """
-    t = float(MOTION_TILT)
-
-    specs = [
-        ("z",       [0, 0, 1],      [0, 0, -1],      [0, 0, 1]),
-        ("x_plus",  [t, 0, 1],      [-t, 0, -1],     [t, 0, 1]),
-        ("x_minus", [-t, 0, 1],     [t, 0, -1],      [-t, 0, 1]),
-        ("y_plus",  [0, t, 1],      [0, -t, -1],     [0, t, 1]),
-        ("y_minus", [0, -t, 1],     [0, t, -1],      [0, -t, 1]),
-    ]
-
-    if arm_tag == "rgt":
-        order = ["z", "y_minus", "x_plus", "x_minus", "y_plus"]
-    else:
-        order = ["z", "y_plus", "x_minus", "x_plus", "y_minus"]
-
-    spec_map = {name: (pd, pa, pld) for name, pd, pa, pld in specs}
-
-    # 直线段距离缩到 0 并不会跳过直线段: gen_rel_linear_motion 在 distance=0 时算出
-    # start_tcp_pos == goal_tcp_pos, 然后照样调 gen_linear_motion 并以 seed=None 重解 IK,
-    # 所以既没省掉 IK, 还可能落到与已认证抓取不同的 IK 分支上。真正不生成这段的做法见
-    # LINEAR_FREE_TAG / DirectTransportPrimitive; 这里的 0 距离只是"尽量短", 保留作为
-    # 第一批候选(能过就仍然用更严格的强制直线解)。
-    no_linear = pid in NOLINEAR_PART_IDS
-    pick_dep_d = 0.0 if no_linear else PICK_DEPART_DIST
-    place_app_d = 0.0 if no_linear else PLACE_APPROACH_DIST
-    place_dep_d = 0.0 if (no_linear or skip_place_depart) else PLACE_DEPART_DIST
-
-    out = []
-    for name in order:
-        pd, pa, pld = spec_map[name]
-        out.append((
-            name,
-            dict(
-                pick_depart_direction=_unit_vec(pd),
-                pick_depart_distance=pick_dep_d,
-                place_approach_direction_list=[_unit_vec(pa)],
-                place_approach_distance_list=[place_app_d],
-                place_depart_direction_list=[_unit_vec(pld)],
-                place_depart_distance_list=[place_dep_d],
-            )
-        ))
-    return out
+    return dict(
+        pick_depart_direction=_unit_vec([0, 0, 1]),
+        pick_depart_distance=PICK_DEPART_DIST,
+        place_approach_direction_list=[_unit_vec(place_approach_dir)],
+        place_approach_distance_list=[PLACE_APPROACH_DIST],
+        place_depart_direction_list=[_unit_vec(place_depart_dir)],
+        place_depart_distance_list=[0.0 if skip_place_depart else PLACE_DEPART_DIST],
+    )
 
 
-def _linear_free_kwargs(pid: str, arm_tag: str) -> Dict:
-    """落位方向传给无直线段规划器: 它只用这个方向摆放"接触前的让位构型"。"""
-    _, kwargs = _motion_candidate_kwargs(pid, arm_tag)[0]
-    return {"place_depart_direction_list": kwargs["place_depart_direction_list"]}
+def _plan_candidates(asm: AssemblyDef, pid: str, goal_rotmat, *,
+                     skip_place_depart: bool = False):
+    """本步要依次尝试的规划方案: 装配轴上的强制直线, 然后无直线段规划。
 
-
-def _plan_candidates(pid: str, arm_tag: str, *, skip_place_depart: bool = False):
-    """本步要依次尝试的规划方案。
-
-    先把所有强制 Cartesian 直线段的方向候选试完 —— 它约束更强, 能过就用它。全部失败后
-    再试一次无强制直线段的单臂规划(仍是同一只手臂、同一个 grasp, 不换手也不中途放下)。
-    这个兜底对所有零件都挂上: 它只在前面全挂之后才会跑, 换装配体时不需要再维护名单。
+    以前这里会把纯 Z 加上四个水平偏置方向轮流试一遍。那五个方向都是凭空猜的世界方向,
+    跟装配体怎么装没有关系; 而每个失败的方向都要把整套 grasp 的直线段 IK 重算一遍
+    (middle_plate 单个方向就能跑掉几十分钟)。既然 asmdef 已经写明了插接轴, 就只试它,
+    过不了直接交给 DirectTransportPrimitive —— 后者本来就不受"沿线每点都要有 IK"的约束,
+    它才是这类零件真正能解出来的那条路。
     """
-    out = _motion_candidate_kwargs(pid, arm_tag, skip_place_depart=skip_place_depart)
-    return list(out) + [(LINEAR_FREE_TAG, {})]
+    approach, depart, from_asmdef = _mating_dirs_or_default(asm, pid, goal_rotmat)
+    tag = "asmdef_axis" if from_asmdef else "topdown_default"
+    print(f"    [装配轴] {pid}: approach={np.round(approach, 3).tolist()} "
+          f"depart={np.round(depart, 3).tolist()} "
+          f"({'asmdef 声明' if from_asmdef else '未声明, 回退到 -Z 放下'})")
+    cartesian = _motion_candidate_kwargs(approach, depart,
+                                         skip_place_depart=skip_place_depart)
+    return [(tag, cartesian),
+            (LINEAR_FREE_TAG, {"place_depart_direction_list": [_unit_vec(depart)]})]
 
 
 def _last_assembly_part_id(part_order: List[str], layout: WorkspaceLayout) -> Optional[str]:
@@ -1555,16 +1546,26 @@ _ANIME_RELEASE_COUNTER = 0
 
 
 def _hard_release_mesh(mesh) -> None:
-    """释放上一帧，并周期性触发 GC，降低长动画回放时的内存压力。"""
+    """释放上一帧动画 mesh，避免 Panda3D 场景里逐帧累积几何。"""
     global _ANIME_RELEASE_COUNTER
     if mesh is None:
         return
+    for cm in getattr(mesh, "cm_list", None) or []:
+        try:
+            cm.detach()
+        except Exception:
+            pass
+    for np_node in getattr(mesh, "np", None) or []:
+        try:
+            np_node.removeNode()
+        except Exception:
+            pass
     try:
         mesh.detach()
     except Exception:
         pass
     _ANIME_RELEASE_COUNTER += 1
-    if _ANIME_RELEASE_COUNTER % 40 == 0:
+    if _ANIME_RELEASE_COUNTER % 20 == 0:
         try:
             gc.collect()
         except Exception:
@@ -1577,9 +1578,9 @@ def animate_success_steps(
     runner=None,
     interval: float = 0.03,  # 保留参数仅为向后兼容，已不再使用 task tick。
     auto_play: bool = False,  # 保留参数仅为向后兼容，自动播放已彻底关闭。
-    frame_stride: int = 1,    # >1 时每按一次 SPACE 跳 N 帧，减少重型 mesh 上传次数。
+    frame_stride: int = 2,    # 每按一次 SPACE 跳 N 帧，减少重型 mesh 上传次数。
 ):
-    """SPACE 驱动播放：按一次推进一帧；全部播放完后再按 SPACE 重新开始。
+    """SPACE 驱动播放：按一次推进 frame_stride 帧；全部播放完后再按 SPACE 重新开始。
 
     动画状态机：
         PRE   ：零件保持在 layout 的 staging 初始位置；
@@ -1695,12 +1696,16 @@ def animate_success_steps(
             pass
 
     class _AnimeState:
-        __slots__ = ("step_idx", "frame_idx", "last_attached", "finished", "loop_count", "home_done")
+        __slots__ = (
+            "step_idx", "frame_idx", "last_attached", "last_mesh_idx",
+            "finished", "loop_count", "home_done",
+        )
 
         def __init__(self):
             self.step_idx = 0
             self.frame_idx = 0
             self.last_attached = None
+            self.last_mesh_idx = None
             self.finished = False
             self.loop_count = 0
             self.home_done = False
@@ -1730,10 +1735,23 @@ def animate_success_steps(
                 f"frame={frame_idx}, staging 模型 detach。"
             )
 
+    def _release_current_frame() -> None:
+        if st.last_attached is not None:
+            _hard_release_mesh(st.last_attached)
+            st.last_attached = None
+        if st.step_idx < len(motion_items) and st.last_mesh_idx is not None:
+            mesh_list = getattr(motion_items[st.step_idx].mot_data, "mesh_list", None)
+            if isinstance(mesh_list, _LazyCachedMeshList):
+                mesh_list.release_index(st.last_mesh_idx)
+        st.last_mesh_idx = None
+
     def _reset_for_loop() -> None:
         """循环重置：恢复 staging 颜色块、清掉 assembled 实心件。"""
-        _hard_release_mesh(st.last_attached)
-        st.last_attached = None
+        _release_current_frame()
+        for sm in motion_items:
+            mesh_list = getattr(sm.mot_data, "mesh_list", None)
+            if isinstance(mesh_list, _LazyCachedMeshList):
+                mesh_list.release_all()
         for idx, ph in enumerate(phases):
             sm = motion_items[idx]
             _detach_done_solid(ph.get("done_solid"))
@@ -1754,8 +1772,7 @@ def animate_success_steps(
             mesh_list = getattr(sm.mot_data, "mesh_list", []) or []
 
             if st.frame_idx >= len(mesh_list):
-                _hard_release_mesh(st.last_attached)
-                st.last_attached = None
+                _release_current_frame()
                 _finalize_step(st.step_idx)
                 st.step_idx += 1
                 st.frame_idx = 0
@@ -1768,15 +1785,14 @@ def animate_success_steps(
 
             _advance_phase(st.step_idx, st.frame_idx)
 
-            _hard_release_mesh(st.last_attached)
-            st.last_attached = None
+            _release_current_frame()
 
             mesh.attach_to(base)
             st.last_attached = mesh
+            st.last_mesh_idx = st.frame_idx
             return
 
-        _hard_release_mesh(st.last_attached)
-        st.last_attached = None
+        _release_current_frame()
         st.finished = True
         if not st.home_done:
             _goto_home_sim(runner, base)
@@ -2343,13 +2359,14 @@ class LayoutSequenceVisualizer:
             print(f"[PLAN] pid={pid} 为最后一件: 放置后不做 place_depart, 结束即 home。")
         print(f"\n[PLAN] pid={pid}, preferred_arm={preferred_arm}, try_order={arm_order}")
 
+        plan_candidates = _plan_candidates(
+            self.asm, pid, gr, skip_place_depart=(pid == self._last_assembly_pid))
+
         for arm_tag in arm_order:
             arm = get_layout_arm(self.robot, arm_tag, single_arm=self.single_arm_mode)
             transport = TransportPrimitive(arm)
 
-            for motion_tag, motion_kwargs in _plan_candidates(
-                    pid, arm_tag,
-                    skip_place_depart=(pid == self._last_assembly_pid)):
+            for motion_tag, motion_kwargs in plan_candidates:
                 # 每次尝试复制一个 moving object，避免失败污染 staging model
                 moving = make_collision_model(self.asm.model_path(pid), cdprim_type=self.cdprim_type)
                 moving.pos = obj_cm.pos.copy()
@@ -2385,7 +2402,7 @@ class LayoutSequenceVisualizer:
                             grasp_obstacle_list=placement_obs,
                             **direct_transport_seating_kwargs(
                                 self.mating_parts(pid, placed), transit_obs),
-                            **_linear_free_kwargs(pid, arm_tag),
+                            **motion_kwargs,
                         )
                     else:
                         try:
@@ -3090,6 +3107,57 @@ def _rebuild_mot_data_from_segments(
     return md
 
 
+def _convert_step_to_lazy_playback(sm: StepMotion, runner) -> StepMotion:
+    """把规划阶段预生成的重型 mesh_list 换成按需生成的惰性回放。"""
+    if getattr(sm.mot_data, "lazy_cache_playback", False):
+        return sm
+
+    src = sm.motion_segments if sm.motion_segments else [sm.mot_data]
+    obj_pose_per_seg = list(sm.obj_pose_per_segment or [])
+    segments_payload = []
+    for idx, md in enumerate(src):
+        if md is None or not getattr(md, "jv_list", None):
+            continue
+        obj_pose_seg = obj_pose_per_seg[idx] if idx < len(obj_pose_per_seg) else None
+        if not obj_pose_seg:
+            obj_pose_seg = _extract_obj_pose_per_frame(getattr(md, "mesh_list", []) or [])
+        segments_payload.append(_serialize_motion_data(md, obj_pose_list=obj_pose_seg))
+
+    if not segments_payload:
+        return sm
+
+    carry_start = _infer_carry_start_for_step(sm, runner)
+    lazy_md = _rebuild_mot_data_from_segments(
+        {
+            "part_id": sm.part_id,
+            "segments": segments_payload,
+            "carry_start": carry_start,
+        },
+        runner,
+    )
+    return StepMotion(
+        step_id=sm.step_id,
+        part_id=sm.part_id,
+        arm_tag=sm.arm_tag,
+        motion_tag=sm.motion_tag,
+        mot_data=lazy_md,
+        motion_segments=sm.motion_segments,
+        obj_pose_per_segment=sm.obj_pose_per_segment,
+    )
+
+
+def convert_summary_to_lazy_playback(summary: ExecutionSummary, runner) -> ExecutionSummary:
+    """重规划后也走惰性 mesh 回放，避免数百帧预生成 mesh 拖慢动画。"""
+    success_steps = [_convert_step_to_lazy_playback(sm, runner) for sm in summary.success_steps]
+    return ExecutionSummary(
+        success_steps=success_steps,
+        failed_steps=list(summary.failed_steps),
+        failed_step_id=summary.failed_step_id,
+        failed_part_id=summary.failed_part_id,
+        failed_reason=summary.failed_reason,
+    )
+
+
 def rebuild_summary_from_cache(payload: dict, runner) -> ExecutionSummary:
     print("[CACHE/LAZY] 使用惰性回放：只保存关节帧，按 SPACE 到达时再生成 mesh。")
     runner._cache_replay_lft_jv = np.asarray(HOME_JV, dtype=float)
@@ -3222,14 +3290,15 @@ def _parse_args():
     parser.add_argument(
         "--anime-stride",
         type=int,
-        default=1,
-        help="动画每按一次 SPACE 推进的帧数(>1 可显著减少重型 mesh 上传次数、缓解卡顿)。",
+        default=2,
+        help="动画每按一次 SPACE 推进的帧数(默认 2，减少重型 mesh 上传次数、缓解卡顿)。",
     )
     parser.add_argument(
         "--lazy-cache-keep",
         type=int,
-        default=1,
-        help="缓存回放时最多保留最近多少帧 mesh。默认 1，显著降低显存/内存占用；调大可减少重复生成。",
+        default=0,
+        help="惰性回放时最多保留最近多少帧 mesh。默认 0=只显示当前帧、不累积；"
+             "调大可减少重复生成但占更多内存。",
     )
     parser.add_argument(
         "--anime-full-robot",
@@ -3428,6 +3497,9 @@ def main():
         print("\n全部步骤成功。")
     else:
         print("\n注意：失败步骤不会播放动画；成功步骤会继续播放。")
+
+    summary = convert_summary_to_lazy_playback(summary, runner)
+    print("[ANIME] 使用惰性 mesh 回放：每帧只渲染当前姿态，上一帧立即 detach。")
 
     animate_success_steps(
         base,

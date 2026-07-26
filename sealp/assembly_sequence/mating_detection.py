@@ -154,9 +154,14 @@ def _print_report(current_pid: str,
                   measured: Sequence[Tuple[str, float]],
                   mating: Set[str],
                   threshold: float) -> None:
+    dist_of = dict(measured)
     print("[AUTO CONTACT]")
     print(f"  current = {current_pid}")
-    print(f"  parent  = {parent if parent else '-'}")
+    if parent and parent in mating and dist_of.get(parent, float("inf")) > threshold:
+        print(f"  parent  = {parent} (kept on the asmdef relation; "
+              f"goal distance {dist_of[parent] * 1000:.1f}mm)")
+    else:
+        print(f"  parent  = {parent if parent else '-'}")
     near = sorted((m for m in measured if m[1] <= threshold), key=lambda kv: kv[1])
     far = sorted((m for m in measured if m[1] > threshold), key=lambda kv: kv[1])
     print(f"  goal-near parts (<= {threshold * 1000:.1f}mm) =")
