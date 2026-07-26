@@ -139,7 +139,7 @@ DEFAULT_CONFIG = os.path.join(SEALP_ROOT, "config", "sample_config.yaml")
 DEFAULT_GRASP_DIR = os.path.join(SEALP_ROOT, "examples", "grasp", "tower_grasp")
 DEFAULT_HANDOVER_DIR = os.path.join(SEALP_ROOT, "examples", "grasp", "tower_handover")
 DEFAULT_MOTION_CACHE_DIR = os.path.join(SEALP_ROOT, "examples", "motion", "_output")
-MOTION_CACHE_FORMAT_VERSION = "2.4"
+MOTION_CACHE_FORMAT_VERSION = "2.5-symmetry"
 
 # middle_plate 直接走换手，不走单臂 pick-place（默认关，见 --middle-plate-handover）
 HANDOVER_PART_IDS = frozenset({"middle_plate"})
@@ -1836,6 +1836,10 @@ class LayoutSequenceVisualizer:
         enable_middle_plate_regrasp: bool = True,
         handover_dir: str = DEFAULT_HANDOVER_DIR,
         dual_arm_overlay: bool = False,
+        auto_symmetry: bool = True,
+        symmetry_rel_tol: float = 0.0025,
+        symmetry_abs_tol: float = 2.0e-4,
+        max_auto_symmetries: int = 12,
     ):
         self.asm = asm
         self.layout = layout
@@ -1848,6 +1852,12 @@ class LayoutSequenceVisualizer:
         # 该叠加会让每帧三角面几何近乎翻倍(全程 100+ 帧)，是卡顿/黑屏崩溃的主因，
         # 且正在运动的那只手臂本来就会画出来。需要双臂常驻可用 --dual-arm-overlay 打开。
         self.dual_arm_overlay = bool(dual_arm_overlay)
+        # Geometry-driven self-symmetry reasoning for DirectTransport.  No part ids are encoded:
+        # every moved CAD model is checked independently; asymmetric parts simply keep identity.
+        self.auto_symmetry = bool(auto_symmetry)
+        self.symmetry_rel_tol = float(symmetry_rel_tol)
+        self.symmetry_abs_tol = float(symmetry_abs_tol)
+        self.max_auto_symmetries = max(1, int(max_auto_symmetries))
         self.enable_middle_plate_regrasp = bool(enable_middle_plate_regrasp)
         self._middle_plate_hopg = os.path.join(
             handover_dir or DEFAULT_HANDOVER_DIR, "middle_plate_hopg.pickle"
@@ -2402,6 +2412,10 @@ class LayoutSequenceVisualizer:
                             grasp_obstacle_list=placement_obs,
                             **direct_transport_seating_kwargs(
                                 self.mating_parts(pid, placed), transit_obs),
+                            use_auto_symmetry=self.auto_symmetry,
+                            symmetry_rel_tol=self.symmetry_rel_tol,
+                            symmetry_abs_tol=self.symmetry_abs_tol,
+                            max_auto_symmetries=self.max_auto_symmetries,
                             **motion_kwargs,
                         )
                     else:
@@ -2704,6 +2718,10 @@ def _motion_cache_fingerprint(
     contact_exclusion_map: Optional[Dict[str, List[str]]] = None,
     *,
     single_arm_mode: bool = False,
+    auto_symmetry: bool = True,
+    symmetry_rel_tol: float = 0.0025,
+    symmetry_abs_tol: float = 2.0e-4,
+    max_auto_symmetries: int = 12,
 ) -> str:
     """用关键输入生成缓存指纹，避免 layout/asmdef 改了还误用旧路径。"""
     meta = {
@@ -2717,6 +2735,10 @@ def _motion_cache_fingerprint(
         "grasp_map": grasp_map or {},
         "contact_exclusion_map": contact_exclusion_map or {},
         "single_arm_mode": bool(single_arm_mode),
+        "auto_symmetry": bool(auto_symmetry),
+        "symmetry_rel_tol": float(symmetry_rel_tol),
+        "symmetry_abs_tol": float(symmetry_abs_tol),
+        "max_auto_symmetries": int(max_auto_symmetries),
         "pick_depart_dist": float(PICK_DEPART_DIST),
         "place_depart_dist": float(PLACE_DEPART_DIST),
         "skip_place_depart_last": True,
@@ -3324,6 +3346,29 @@ def _parse_args():
             "用于判断 No common grasp 是否由障碍物导致。只建议配合 --no-save-cache 使用。"
         ),
     )
+    parser.add_argument(
+        "--disable-auto-symmetry",
+        action="store_true",
+        help="关闭 DirectTransport 的 CAD 几何自对称识别；默认开启。",
+    )
+    parser.add_argument(
+        "--symmetry-rel-tol",
+        type=float,
+        default=0.0025,
+        help="CAD 自对称验证的相对几何容差（相对物体包围盒对角线），默认 0.0025。",
+    )
+    parser.add_argument(
+        "--symmetry-abs-tol",
+        type=float,
+        default=2.0e-4,
+        help="CAD 自对称验证的绝对容差，单位 m，默认 0.0002。",
+    )
+    parser.add_argument(
+        "--max-auto-symmetries",
+        type=int,
+        default=12,
+        help="每个零件最多保留的已验证对称变换数量（含 identity），默认 12。",
+    )
     return parser.parse_args()
 
 
@@ -3362,6 +3407,10 @@ def main():
     print(f"anime_stride = {max(1, int(args.anime_stride))}  # 每按一次 SPACE 推进的帧数")
     print(f"anime_full_robot = {bool(getattr(args, 'anime_full_robot', False))}  "
           f"# 默认 False(单臂步骤只画运动臂, 缓存回放更顺); True 恢复整机渲染")
+    print(f"auto_symmetry = {not bool(getattr(args, 'disable_auto_symmetry', False))}  "
+          f"rel_tol={float(getattr(args, 'symmetry_rel_tol', 0.0025))} "
+          f"abs_tol={float(getattr(args, 'symmetry_abs_tol', 2.0e-4))} "
+          f"max={int(getattr(args, 'max_auto_symmetries', 12))}")
     print("=" * 78)
 
     asm = AssemblyDef.load(asmdef_path)
@@ -3393,6 +3442,10 @@ def main():
         enable_middle_plate_regrasp=mp_handover,
         handover_dir=os.path.abspath(args.handover_dir),
         dual_arm_overlay=args.dual_arm_overlay,
+        auto_symmetry=not bool(getattr(args, "disable_auto_symmetry", False)),
+        symmetry_rel_tol=float(getattr(args, "symmetry_rel_tol", 0.0025)),
+        symmetry_abs_tol=float(getattr(args, "symmetry_abs_tol", 2.0e-4)),
+        max_auto_symmetries=int(getattr(args, "max_auto_symmetries", 12)),
     )
     runner.debug_obstacles = bool(getattr(args, "debug_obstacles", False))
     runner.debug_part = str(getattr(args, "debug_part", "") or "").strip()
@@ -3422,6 +3475,10 @@ def main():
         grasp_map=grasp_map,
         contact_exclusion_map=contact_exclusion_map,
         single_arm_mode=single_arm_mode,
+        auto_symmetry=not bool(getattr(args, "disable_auto_symmetry", False)),
+        symmetry_rel_tol=float(getattr(args, "symmetry_rel_tol", 0.0025)),
+        symmetry_abs_tol=float(getattr(args, "symmetry_abs_tol", 2.0e-4)),
+        max_auto_symmetries=int(getattr(args, "max_auto_symmetries", 12)),
     )
     print(f"motion_cache = {cache_path}")
     print(f"cache_fp     = {fingerprint}")

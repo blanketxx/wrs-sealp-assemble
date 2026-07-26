@@ -58,7 +58,14 @@ from __future__ import annotations
 
 from typing import List, Optional, Sequence, Tuple
 
+import itertools
+import math
 import numpy as np
+
+try:
+    from scipy.spatial import cKDTree
+except Exception:  # scipy is optional; identity-only fallback remains available
+    cKDTree = None
 
 import wrs.basis.robot_math as rm
 import wrs.motion.motion_data as motd
@@ -79,6 +86,288 @@ Pose = Tuple[np.ndarray, np.ndarray]
 # subject to the 45-degree straightness rule that kills the Cartesian segments.
 DEFAULT_STANDOFF_SCHEDULE: Tuple[float, ...] = (0.06, 0.045, 0.03, 0.02, 0.012, 0.006)
 
+# Automatic object-symmetry reasoning.  The detector is deliberately conservative: a transform is
+# accepted only when it maps the object's own local mesh back onto itself within a small geometric
+# tolerance.  No part names, assembly names, or tower-specific axes are used.
+DEFAULT_SYMMETRY_REL_TOL = 0.0025       # 0.25 % of object diagonal
+DEFAULT_SYMMETRY_ABS_TOL = 2.0e-4      # 0.2 mm floor for CAD tessellation noise
+DEFAULT_SYMMETRY_MAX_POINTS = 6000
+DEFAULT_MAX_AUTO_SYMMETRIES = 12       # includes identity
+
+
+class _ObjectSymmetry:
+    __slots__ = ("rotmat", "offset", "label", "error")
+
+    def __init__(self, rotmat, offset=None, label="identity", error=0.0):
+        self.rotmat = np.asarray(rotmat, dtype=float).reshape(3, 3)
+        self.offset = (np.zeros(3, dtype=float) if offset is None
+                       else np.asarray(offset, dtype=float).reshape(3))
+        self.label = str(label)
+        self.error = float(error)
+
+
+class _GraspCandidate:
+    __slots__ = ("gid", "grasp", "q_pick", "q_place", "goal_pose", "symmetry_label")
+
+    def __init__(self, gid, grasp, q_pick, q_place, goal_pose, symmetry_label="identity"):
+        self.gid = gid
+        self.grasp = grasp
+        self.q_pick = q_pick
+        self.q_place = q_place
+        self.goal_pose = (np.asarray(goal_pose[0], dtype=float).copy(),
+                          np.asarray(goal_pose[1], dtype=float).copy())
+        self.symmetry_label = str(symmetry_label)
+
+    @property
+    def key(self) -> str:
+        return f"gid={self.gid}@{self.symmetry_label}"
+
+
+def _axis_angle_rotmat(axis, angle: float) -> np.ndarray:
+    """Rodrigues rotation; kept local so symmetry detection has no WRS-version dependency."""
+    axis = np.asarray(axis, dtype=float).reshape(3)
+    n = float(np.linalg.norm(axis))
+    if n < 1e-12:
+        return np.eye(3)
+    x, y, z = axis / n
+    c, ss = math.cos(float(angle)), math.sin(float(angle))
+    C = 1.0 - c
+    return np.array([
+        [c + x*x*C,     x*y*C - z*ss, x*z*C + y*ss],
+        [y*x*C + z*ss, c + y*y*C,     y*z*C - x*ss],
+        [z*x*C - y*ss, z*y*C + x*ss, c + z*z*C],
+    ], dtype=float)
+
+
+def _rotation_angle(rotmat: np.ndarray) -> float:
+    c = float(np.clip((np.trace(rotmat) - 1.0) * 0.5, -1.0, 1.0))
+    return float(math.acos(c))
+
+
+def _mesh_from_cmodel(obj_cmodel):
+    """Return the underlying trimesh-like object across the WRS variants used by SEALP."""
+    for attr in ("trm_mesh", "_trm_mesh", "mesh", "_mesh", "objtrm"):
+        try:
+            mesh = getattr(obj_cmodel, attr, None)
+        except Exception:
+            mesh = None
+        if mesh is not None and hasattr(mesh, "vertices"):
+            return mesh
+    return None
+
+
+def _mesh_local_bounds(obj_cmodel):
+    mesh = _mesh_from_cmodel(obj_cmodel)
+    if mesh is None:
+        return None
+    try:
+        vertices = np.asarray(mesh.vertices, dtype=float)
+    except Exception:
+        return None
+    if vertices.ndim != 2 or vertices.shape[1] != 3 or len(vertices) < 4:
+        return None
+    return vertices.min(axis=0), vertices.max(axis=0)
+
+
+def _local_mesh_points(obj_cmodel, max_points: int = DEFAULT_SYMMETRY_MAX_POINTS):
+    """Return a geometry-driven local-frame surface cloud plus its sampling resolution.
+
+    Preferred path uses ``trimesh.voxelized``.  Surface voxels are independent of the STL triangle
+    diagonals, so a square/cube is still recognised as 90-degree symmetric even when opposite faces
+    were triangulated differently.  The pitch is automatically coarsened only when the cloud would
+    otherwise become too large.  Raw vertices/face centroids are the fallback for older mesh types.
+    """
+    mesh = _mesh_from_cmodel(obj_cmodel)
+    if mesh is None:
+        return None, None
+    try:
+        vertices = np.asarray(mesh.vertices, dtype=float)
+    except Exception:
+        return None, None
+    if vertices.ndim != 2 or vertices.shape[1] != 3 or len(vertices) < 4:
+        return None, None
+
+    pmin, pmax = vertices.min(axis=0), vertices.max(axis=0)
+    diag = float(np.linalg.norm(pmax - pmin))
+    if diag < 1e-9:
+        return vertices, 0.0
+
+    # About 250 cells along the diagonal is fine enough for assembly CAD while still cheap enough
+    # to run once per moved part.  Never go below 0.25 mm by default.
+    pitch = max(2.5e-4, diag / 250.0)
+    try:
+        if hasattr(mesh, "voxelized"):
+            for _ in range(4):
+                vox = mesh.voxelized(pitch)
+                pts = np.asarray(vox.points, dtype=float)
+                pts = pts[np.all(np.isfinite(pts), axis=1)]
+                if 4 <= len(pts) <= int(max_points):
+                    return pts, pitch
+                if len(pts) > int(max_points):
+                    # Surface point count scales approximately with 1/pitch^2.
+                    pitch *= max(1.15, math.sqrt(len(pts) / float(max_points)))
+                    continue
+                break
+    except Exception:
+        pass
+
+    clouds = [vertices]
+    try:
+        faces = np.asarray(mesh.faces, dtype=np.int64)
+        if faces.ndim == 2 and faces.shape[1] >= 3 and len(faces):
+            clouds.append(vertices[faces[:, :3]].mean(axis=1))
+    except Exception:
+        pass
+    pts = np.vstack(clouds)
+    pts = pts[np.all(np.isfinite(pts), axis=1)]
+    if len(pts) > int(max_points):
+        idx = np.linspace(0, len(pts) - 1, int(max_points), dtype=np.int64)
+        pts = pts[idx]
+    return (pts if len(pts) >= 4 else None), None
+
+
+def _proper_signed_permutations() -> List[np.ndarray]:
+    """The 24 orientation-preserving signed permutation rotations."""
+    mats: List[np.ndarray] = []
+    eye = np.eye(3)
+    for perm in itertools.permutations(range(3)):
+        base = eye[:, perm]
+        for signs in itertools.product((-1.0, 1.0), repeat=3):
+            R = base @ np.diag(signs)
+            if np.linalg.det(R) > 0.5:
+                mats.append(R)
+    return mats
+
+
+def _candidate_symmetry_rotations(points: np.ndarray) -> List[Tuple[str, np.ndarray]]:
+    """Geometry-generic discrete rotation proposals in model axes and PCA axes.
+
+    The proposals are only hypotheses.  `_detect_object_symmetries` subsequently verifies every
+    hypothesis against the actual mesh, so an asymmetric object still keeps identity only.
+    """
+    candidates: List[Tuple[str, np.ndarray]] = [("identity", np.eye(3))]
+    candidates.extend((f"signed_perm_{i:02d}", R) for i, R in enumerate(_proper_signed_permutations()))
+
+    center = 0.5 * (points.min(axis=0) + points.max(axis=0))
+    X = points - center
+    bases = [("model", np.eye(3))]
+    try:
+        cov = (X.T @ X) / max(1, len(X))
+        _, V = np.linalg.eigh(cov)
+        V = V[:, ::-1]
+        if np.linalg.det(V) < 0:
+            V[:, -1] *= -1.0
+        bases.append(("pca", V))
+    except Exception:
+        pass
+
+    # Common finite CAD symmetries plus 30-degree increments for 6/12-fold axial parts.
+    angles_deg = (30, 45, 60, 90, 120, 135, 150, 180, 210, 225, 240, 270, 300, 315, 330)
+    for basis_name, B in bases:
+        for axis_i in range(3):
+            axis = B[:, axis_i]
+            for deg in angles_deg:
+                candidates.append((f"{basis_name}_a{axis_i}_{deg}",
+                                   _axis_angle_rotmat(axis, math.radians(deg))))
+
+    # Remove numerically duplicate rotations before expensive mesh checks.
+    unique: List[Tuple[str, np.ndarray]] = []
+    for label, R in candidates:
+        if any(np.max(np.abs(R - old_R)) < 1e-7 for _, old_R in unique):
+            continue
+        unique.append((label, R))
+    return unique
+
+
+def _detect_object_symmetries(obj_cmodel,
+                              rel_tol: float = DEFAULT_SYMMETRY_REL_TOL,
+                              abs_tol: float = DEFAULT_SYMMETRY_ABS_TOL,
+                              max_points: int = DEFAULT_SYMMETRY_MAX_POINTS,
+                              max_symmetries: int = DEFAULT_MAX_AUTO_SYMMETRIES,
+                              ) -> List[_ObjectSymmetry]:
+    """Infer proper rigid self-symmetries from the current object's CAD mesh.
+
+    Each accepted transform S=(R,t) satisfies x' = R x + t and maps the local object surface back
+    onto itself.  Rotation is performed about the mesh bounding-box centre, so this also works when
+    the CAD origin is not at the geometric centre.  If mesh access/scipy is unavailable, identity is
+    returned and the planner behaves exactly like the old implementation.
+    """
+    identity = _ObjectSymmetry(np.eye(3), np.zeros(3), "identity", 0.0)
+    if cKDTree is None:
+        return [identity]
+    points, sample_resolution = _local_mesh_points(obj_cmodel, max_points=max_points)
+    if points is None or len(points) < 4:
+        return [identity]
+
+    raw_bounds = _mesh_local_bounds(obj_cmodel)
+    if raw_bounds is None:
+        pmin, pmax = points.min(axis=0), points.max(axis=0)
+    else:
+        pmin, pmax = raw_bounds
+    center = 0.5 * (pmin + pmax)
+    diag = float(np.linalg.norm(pmax - pmin))
+    if diag < 1e-9:
+        return [identity]
+    tol = max(float(abs_tol), float(rel_tol) * diag)
+    if sample_resolution is not None:
+        tol = max(tol, 1.75 * float(sample_resolution))
+    tree = cKDTree(points)
+    X = points - center
+    cov = (X.T @ X) / max(1, len(X))
+    cov_scale = max(float(np.linalg.norm(cov)), 1e-12)
+
+    accepted: List[_ObjectSymmetry] = [identity]
+    for label, R in _candidate_symmetry_rotations(points):
+        if np.max(np.abs(R - np.eye(3))) < 1e-7:
+            continue
+        # Necessary second-moment invariance rejects most impossible axes before the denser
+        # surface comparison (e.g. a 90-deg rotation that swaps unequal box dimensions).
+        if float(np.linalg.norm(R @ cov @ R.T - cov)) > 2.0e-3 * cov_scale:
+            continue
+        # Full SE(3) self-transform for a rotation about the object's geometric centre.
+        t = center - R @ center
+        moved = points @ R.T + t
+        d1 = tree.query(moved, k=1)[0]
+        # A second direction prevents a near-subset from looking symmetric.
+        moved_tree = cKDTree(moved)
+        d2 = moved_tree.query(points, k=1)[0]
+        d = np.concatenate((np.asarray(d1), np.asarray(d2)))
+        p95 = float(np.quantile(d, 0.95))
+        rms = float(np.sqrt(np.mean(d * d)))
+        # Conservative enough for collision planning, but tolerant of STL tessellation diagonals.
+        if p95 <= 2.0 * tol and rms <= 1.25 * tol:
+            accepted.append(_ObjectSymmetry(R, t, label, max(p95, rms)))
+
+    # Prefer low-error symmetries, then smaller rotations. Identity stays first.
+    rest = accepted[1:]
+    rest.sort(key=lambda s: (s.error, _rotation_angle(s.rotmat)))
+    # Deduplicate transforms that were proposed in both model and PCA bases.
+    unique = [identity]
+    for sym in rest:
+        if any(np.max(np.abs(sym.rotmat - old.rotmat)) < 1e-6 and
+               np.linalg.norm(sym.offset - old.offset) < 1e-6 for old in unique):
+            continue
+        unique.append(sym)
+        if len(unique) >= max(1, int(max_symmetries)):
+            break
+    return unique
+
+
+def _compose_pose_with_local_transform(pose: Pose, symmetry: _ObjectSymmetry) -> Pose:
+    """Compose world object pose T_WO with local self-symmetry S: T_WO_equiv = T_WO * S."""
+    p, R = pose
+    p = np.asarray(p, dtype=float)
+    R = np.asarray(R, dtype=float)
+    return p + R @ symmetry.offset, R @ symmetry.rotmat
+
+
+def _tcp_world_pose(obj_pose: Pose, grasp) -> Pose:
+    """The exact WRS local-grasp -> world-TCP conversion used for all IK checks."""
+    p, R = obj_pose
+    p = np.asarray(p, dtype=float)
+    R = np.asarray(R, dtype=float)
+    return p + R @ np.asarray(grasp.ac_pos, dtype=float), R @ np.asarray(grasp.ac_rotmat, dtype=float)
+
 
 def _summarise(reasons: Sequence[str]) -> str:
     """Group per-grasp failure messages by kind, so the dominant cause is visible at a glance."""
@@ -88,16 +377,6 @@ def _summarise(reasons: Sequence[str]) -> str:
         counts[key] = counts.get(key, 0) + 1
     ordered = sorted(counts.items(), key=lambda kv: -kv[1])
     return "; ".join(f"{n}x {key}" for key, n in ordered)
-
-
-class _GraspCandidate:
-    __slots__ = ("gid", "grasp", "q_pick", "q_place")
-
-    def __init__(self, gid, grasp, q_pick, q_place):
-        self.gid = gid
-        self.grasp = grasp
-        self.q_pick = q_pick
-        self.q_place = q_place
 
 
 class DirectTransportPrimitive(MotionPrimitive):
@@ -208,14 +487,30 @@ class DirectTransportPrimitive(MotionPrimitive):
         # by the audits below.
         obj_at_start = obj_cmodel.copy()
         obj_at_start.pose = start_pose
-        obj_at_goal = obj_cmodel.copy()
-        obj_at_goal.pose = goal_pose
+
+        # Geometry-driven symmetry: no part-id special cases.  Equivalent goal poses are generated
+        # from rigid self-symmetries of the current CAD mesh, then every grasp is converted to the
+        # WORLD TCP pose before IK/collision certification.  Identity is always present, so a mesh
+        # with no verified symmetry behaves exactly like the old planner.
+        use_auto_symmetry = bool(kwargs.get("use_auto_symmetry", True))
+        if use_auto_symmetry:
+            symmetries = _detect_object_symmetries(
+                obj_cmodel,
+                rel_tol=float(kwargs.get("symmetry_rel_tol", DEFAULT_SYMMETRY_REL_TOL)),
+                abs_tol=float(kwargs.get("symmetry_abs_tol", DEFAULT_SYMMETRY_ABS_TOL)),
+                max_points=int(kwargs.get("symmetry_max_points", DEFAULT_SYMMETRY_MAX_POINTS)),
+                max_symmetries=int(kwargs.get("max_auto_symmetries", DEFAULT_MAX_AUTO_SYMMETRIES)),
+            )
+        else:
+            symmetries = [_ObjectSymmetry(np.eye(3), np.zeros(3), "identity", 0.0)]
+        print(f"  [direct/symmetry] verified self-symmetries={len(symmetries)}: "
+              f"{[s.label for s in symmetries]}")
 
         self.robot.backup_state()
         try:
             candidates = self._certify_grasps(
                 grasp_collection, start_pose, goal_pose, relaxed_obs,
-                mating_mesh_obs=mating_mesh_obs,
+                mating_mesh_obs=mating_mesh_obs, symmetries=symmetries,
             )
         finally:
             self.robot.restore_state()
@@ -225,7 +520,16 @@ class DirectTransportPrimitive(MotionPrimitive):
                 error_msg="no grasp is IK-feasible and collision-free at both the staging "
                           f"and the goal pose ({getattr(self, 'last_certification', '')})")
         print(f"  [direct] certified grasps={len(candidates)} "
-              f"(gids={[c.gid for c in candidates[:8]]}{'...' if len(candidates) > 8 else ''})")
+              f"(candidates={[c.key for c in candidates[:8]]}{'...' if len(candidates) > 8 else ''})")
+        for cand in candidates[:8]:
+            pick_tcp = _tcp_world_pose(start_pose, cand.grasp)
+            place_tcp = _tcp_world_pose(cand.goal_pose, cand.grasp)
+            print(
+                f"    [world-tcp] {cand.key}: "
+                f"pick_p={np.round(pick_tcp[0], 4).tolist()} "
+                f"place_p={np.round(place_tcp[0], 4).tolist()} "
+                f"|dq|inf={float(np.max(np.abs(cand.q_place-cand.q_pick))):.4f}"
+            )
 
         last_err = "no rrt path"
         reasons: List[str] = []
@@ -238,7 +542,6 @@ class DirectTransportPrimitive(MotionPrimitive):
                     cand=cand,
                     obj_cmodel=obj_cmodel,
                     obj_at_start=obj_at_start,
-                    obj_at_goal=obj_at_goal,
                     start_jnt_values=start_jnt_values,
                     end_jnt_values=end_jnt_values,
                     strict_obs=strict_obs,
@@ -253,7 +556,7 @@ class DirectTransportPrimitive(MotionPrimitive):
             finally:
                 self._reset_to(depth)
             if mot_data is not None:
-                print(f"  [direct] solved with gid={cand.gid}, {len(mot_data.jv_list)} waypoints")
+                print(f"  [direct] solved with {cand.key}, {len(mot_data.jv_list)} waypoints")
                 return PrimitiveResult(success=True,
                                        mot_data=mot_data,
                                        end_jnt_values=mot_data.jv_list[-1])
@@ -341,58 +644,76 @@ class DirectTransportPrimitive(MotionPrimitive):
 
     # ------------------------------------------------------------------
     def _certify_grasps(self, grasp_collection, start_pose, goal_pose,
-                        relaxed_obs, *, mating_mesh_obs) -> List[_GraspCandidate]:
-        """Grasps that are IK-feasible and collision-free at the staging pose and at the goal pose.
+                        relaxed_obs, *, mating_mesh_obs,
+                        symmetries: Sequence[_ObjectSymmetry]) -> List[_GraspCandidate]:
+        """Certify one rigid grasp against start and all geometry-equivalent goal poses.
 
-        Both configurations are kept. ``q_place`` is solved with ``q_pick`` as its IK seed so the two
-        lie on the same branch, which is what makes the joint-space transport short and is also the
-        continuity the Cartesian segments were trying to obtain by interpolating.
+        The grasp itself is never changed: the same local ``grasp`` object is used from pick to
+        place, so this is still a single-arm, single-grasp transport with no regrasp.  Object
+        symmetry is represented instead by an equivalent final object pose ``T_goal * S``.  Because
+        S has already been verified to map the CAD mesh onto itself, all such poses occupy the same
+        physical goal geometry.
 
-        Mating partners are absent from ``relaxed_obs`` -- their boxes would veto every seated
-        grasp -- so at the goal the gripper is additionally checked against their triangle meshes.
-        A grasp whose fingers end up inside a partner is rejected here rather than at animation
-        time.
+        Crucially, every IK query is performed after converting ``T_WO * T_OG`` to the common WORLD
+        frame via `_tcp_world_pose`; gid equality is not treated as a geometric comparison rule.
         """
         out: List[_GraspCandidate] = []
-        sp, sr = start_pose
-        gp, gr = goal_pose
         pick_fail: List[str] = []
         place_fail: List[str] = []
+        equivalent_goals = [(_compose_pose_with_local_transform(goal_pose, sym), sym)
+                            for sym in symmetries]
+
         for gid in range(len(grasp_collection)):
             grasp = grasp_collection[gid]
-            q_pick, why = self._ik_at_detail(sp, sr, grasp, relaxed_obs, seed=None)
+            q_pick, why = self._ik_at_detail_pose(start_pose, grasp, relaxed_obs, seed=None)
             if q_pick is None:
                 pick_fail.append(why)
                 continue
-            q_place, why = self._ik_at_detail(gp, gr, grasp, relaxed_obs, seed=q_pick,
-                                              mesh_obstacle_list=mating_mesh_obs)
-            if q_place is None and why in ("no ik", "out of joint limits"):
-                # Seeding from q_pick keeps both ends on one IK branch, which is what makes the
-                # transport short -- but it is a preference, not a requirement. A seated pose the
-                # seeded solver misses is still worth having; the candidates are ranked by joint
-                # distance afterwards anyway.
-                q_place, why = self._ik_at_detail(gp, gr, grasp, relaxed_obs, seed=None,
-                                                  mesh_obstacle_list=mating_mesh_obs)
-            if q_place is None:
-                place_fail.append(why)
-                continue
-            out.append(_GraspCandidate(gid, grasp, q_pick, q_place))
-        self.last_certification = (f"{len(grasp_collection)} tried, {len(out)} certified; "
-                                   f"staging rejects {_summarise(pick_fail)}; "
-                                   f"goal rejects {_summarise(place_fail)}")
+
+            found_for_gid = False
+            for eq_goal, sym in equivalent_goals:
+                q_place, why = self._ik_at_detail_pose(
+                    eq_goal, grasp, relaxed_obs, seed=q_pick,
+                    mesh_obstacle_list=mating_mesh_obs)
+                # q_pick is only an IK-branch preference.  If that branch is unreachable, outside
+                # limits, or arm-collided, also try an unseeded branch before rejecting the pose.
+                if q_place is None and why in ("no ik", "out of joint limits", "arm collided"):
+                    q_place, why = self._ik_at_detail_pose(
+                        eq_goal, grasp, relaxed_obs, seed=None,
+                        mesh_obstacle_list=mating_mesh_obs)
+                if q_place is None:
+                    place_fail.append(f"{sym.label}: {why}")
+                    continue
+
+                out.append(_GraspCandidate(
+                    gid=gid,
+                    grasp=grasp,
+                    q_pick=q_pick,
+                    q_place=q_place,
+                    goal_pose=eq_goal,
+                    symmetry_label=sym.label,
+                ))
+                found_for_gid = True
+
+            # Keep all feasible symmetry variants: a slightly longer joint-space candidate may have
+            # a much easier RRT path than the shortest one. `max_grasps` still caps expensive trials.
+            if not found_for_gid:
+                pass
+
+        self.last_certification = (
+            f"{len(grasp_collection)} grasps tried, {len(out)} grasp/symmetry candidates certified; "
+            f"staging rejects {_summarise(pick_fail)}; "
+            f"goal rejects {_summarise(place_fail)}"
+        )
         print(f"  [direct] grasp certification: {self.last_certification}")
-        # Prefer grasps whose two configurations are closest in joint space: the arm has to
-        # reorient the object the least, so the transport is easiest to connect.
         out.sort(key=lambda c: float(np.max(np.abs(c.q_place - c.q_pick))))
         return out
 
     def _ik_at(self, pos, rotmat, grasp, obstacle_list, seed, mesh_obstacle_list=None):
         return self._ik_at_detail(pos, rotmat, grasp, obstacle_list, seed, mesh_obstacle_list)[0]
 
-    def _ik_at_detail(self, pos, rotmat, grasp, obstacle_list, seed, mesh_obstacle_list=None):
-        """``(jnt_values, reason)``; ``reason`` names the check that rejected the grasp."""
-        tcp_pos = pos + rotmat.dot(grasp.ac_pos)
-        tcp_rotmat = rotmat.dot(grasp.ac_rotmat)
+    def _ik_at_detail_pose(self, obj_pose, grasp, obstacle_list, seed, mesh_obstacle_list=None):
+        tcp_pos, tcp_rotmat = _tcp_world_pose(obj_pose, grasp)
         jnt_values = self.robot.ik(tgt_pos=tcp_pos, tgt_rotmat=tcp_rotmat, seed_jnt_values=seed)
         if jnt_values is None:
             return None, "no ik"
@@ -407,8 +728,12 @@ class DirectTransportPrimitive(MotionPrimitive):
             return None, "gripper mesh inside a mating partner"
         return jnt_values, ""
 
+    def _ik_at_detail(self, pos, rotmat, grasp, obstacle_list, seed, mesh_obstacle_list=None):
+        """Backward-compatible wrapper; all actual checks are world-frame TCP checks."""
+        return self._ik_at_detail_pose((pos, rotmat), grasp, obstacle_list, seed, mesh_obstacle_list)
+
     # ------------------------------------------------------------------
-    def _plan_with_grasp(self, cand, obj_cmodel, obj_at_start, obj_at_goal,
+    def _plan_with_grasp(self, cand, obj_cmodel, obj_at_start,
                          start_jnt_values, end_jnt_values, strict_obs, relaxed_obs,
                          mating_mesh_obs, phased_seating,
                          pick_standoff_dir, place_standoff_dir):
@@ -424,7 +749,9 @@ class DirectTransportPrimitive(MotionPrimitive):
         """
         jaw_open = float(self.robot.end_effector.jaw_range[1])
         sp, sr = obj_at_start.pos, obj_at_start.rotmat
-        gp, gr = obj_at_goal.pos, obj_at_goal.rotmat
+        gp, gr = cand.goal_pose
+        obj_at_goal = obj_cmodel.copy()
+        obj_at_goal.pose = (np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))
         # Retreating along the mating axis is what the assembly dictates at the goal; retreating
         # back out of the gripper is the other direction that is guaranteed to clear a side grasp.
         pick_dirs = [pick_standoff_dir] if pick_standoff_dir is not None else [None]
@@ -436,17 +763,17 @@ class DirectTransportPrimitive(MotionPrimitive):
         q_pre_pick, d_pick, detail = self._standoff_conf(
             (sp, sr), cand.grasp, pick_dirs, reach_obs, seed=cand.q_pick, ee_values=jaw_open)
         if q_pre_pick is None:
-            return None, f"gid={cand.gid} no stand-off before the grasp ({detail})"
+            return None, f"{cand.key} no stand-off before the grasp ({detail})"
         reach = self._rrt(start_jnt_values, q_pre_pick, reach_obs, ee_values=jaw_open)
         if reach is None:
-            return None, f"gid={cand.gid} no rrt path to the pre-grasp stand-off"
+            return None, f"{cand.key} no rrt path to the pre-grasp stand-off"
         # closing in on the object: it is excluded here because the gripper has to enclose it
         close_in = self._interpolate(q_pre_pick, cand.q_pick, strict_obs, ee_values=jaw_open)
         if close_in is None:
-            return None, f"gid={cand.gid} cannot close in on the object from the stand-off"
+            return None, f"{cand.key} cannot close in on the object from the stand-off"
         ok, n_contact = self._contact_is_tail(close_in, reach_obs, ee_values=jaw_open, want="tail")
         if not ok:
-            return None, (f"gid={cand.gid} closing in touches the object before the grasp "
+            return None, (f"{cand.key} closing in touches the object before the grasp "
                           f"({n_contact} waypoints)")
 
         # -- grasp, transport, seat --------------------------------------------------------------
@@ -468,27 +795,27 @@ class DirectTransportPrimitive(MotionPrimitive):
                     (gp, gr), cand.grasp, place_dirs, relaxed_obs, seed=cand.q_place,
                     ee_values=cand.grasp.ee_values, mesh_obstacle_list=mating_mesh_obs)
             if q_pre_place is None:
-                return None, f"gid={cand.gid} no stand-off above the goal ({detail})"
+                return None, f"{cand.key} no stand-off above the goal ({detail})"
             transport = self._rrt(cand.q_pick, q_pre_place, strict_obs,
                                   ee_values=cand.grasp.ee_values)
             if transport is None:
-                return None, f"gid={cand.gid} no rrt path from q_pick to the pre-place stand-off"
+                return None, f"{cand.key} no rrt path from q_pick to the pre-place stand-off"
             if phased_seating:
                 seat, seat_err = self._interpolate_seating(
                     q_pre_place, cand.q_place, relaxed_obs, mating_mesh_obs,
                     ee_values=cand.grasp.ee_values)
                 if seat is None:
-                    return None, f"gid={cand.gid} {seat_err}"
+                    return None, f"{cand.key} {seat_err}"
             else:
                 # Legacy path: contact-exempt relaxed obstacles + tail audit.
                 seat = self._interpolate(q_pre_place, cand.q_place, relaxed_obs,
                                          ee_values=cand.grasp.ee_values)
                 if seat is None:
-                    return None, f"gid={cand.gid} cannot seat the object from the stand-off"
+                    return None, f"{cand.key} cannot seat the object from the stand-off"
                 ok, n_contact = self._contact_is_tail(
                     seat, strict_obs, ee_values=cand.grasp.ee_values, want="tail")
                 if not ok:
-                    return None, (f"gid={cand.gid} seating collides before it lands "
+                    return None, (f"{cand.key} seating collides before it lands "
                                   f"({n_contact} waypoints)")
         finally:
             # Always give the object back, including on the early returns above, so the next grasp
@@ -512,25 +839,25 @@ class DirectTransportPrimitive(MotionPrimitive):
                 jaw_release = width
                 break
         if q_post_place is None:
-            return None, f"gid={cand.gid} nowhere to retract to after releasing ({detail})"
+            return None, f"{cand.key} nowhere to retract to after releasing ({detail})"
         back_off = self._interpolate(cand.q_place, q_post_place, relaxed_obs,
                                      ee_values=jaw_release)
         if back_off is None:
-            return None, f"gid={cand.gid} cannot back off from the placed object"
+            return None, f"{cand.key} cannot back off from the placed object"
         if phased_seating:
             ok, why = self._audit_gripper_mesh(back_off, mating_mesh_obs, ee_values=jaw_release)
             if not ok:
-                return None, f"gid={cand.gid} backing off: {why}"
+                return None, f"{cand.key} backing off: {why}"
         ok, n_contact = self._contact_is_tail(back_off, retract_obs, ee_values=jaw_release,
                                               want="head")
         if not ok:
-            return None, (f"gid={cand.gid} backing off re-enters the placed object "
+            return None, (f"{cand.key} backing off re-enters the placed object "
                           f"({n_contact} waypoints)")
         home = self._rrt(q_post_place, end_jnt_values, retract_obs, ee_values=jaw_release)
         if home is None:
-            return None, f"gid={cand.gid} no rrt path from the stand-off back to the end configuration"
+            return None, f"{cand.key} no rrt path from the stand-off back to the end configuration"
 
-        print(f"  [direct] gid={cand.gid} stand-off pick={d_pick * 1000:.0f}mm "
+        print(f"  [direct] {cand.key} stand-off pick={d_pick * 1000:.0f}mm "
               f"place={d_place * 1000:.0f}mm, release opening={jaw_release * 1000:.1f}mm")
         return self._assemble(cand, obj_cmodel, obj_at_start, obj_at_goal,
                               reach_jv=list(reach.jv_list) + list(close_in.jv_list),
