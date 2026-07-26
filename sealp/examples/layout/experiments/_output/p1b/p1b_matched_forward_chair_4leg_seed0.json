@@ -1,0 +1,357 @@
+{
+  "method": "BSFS-beam",
+  "asmdef": "sealp/assembly_sequence/_demo_output/yuanchair.asmdef",
+  "num_parts": 5,
+  "witness_status": "L2_PASS",
+  "objective_cost": 2.745737745632938,
+  "layout_fingerprint": "C0.3730,0.0000|leg_bl:0.3538,0.1203:identity|leg_br:0.4340,-0.2005:identity|leg_fl:0.1934,0.1203:rot90_08|leg_fr:0.1934,-0.2005:identity|beam|0.08|8|1|6|0.1|0.005|0.001|False|False|seat,leg_bl,leg_br,leg_fl,leg_fr",
+  "execution": {
+    "workers": 12,
+    "parallel_level": "candidates",
+    "center_search_mode": "single",
+    "seed": 0,
+    "worker_tasks_submitted": 928,
+    "worker_tasks_completed": 928
+  },
+  "center_search": {
+    "mode": "single",
+    "stage2_skipped": true,
+    "stage3_skipped": true,
+    "stage4_skipped": true,
+    "coarse_centers_total": 0,
+    "coarse_centers_hard_rejected": 0,
+    "coarse_centers_survived": 0,
+    "coarse_centers_retained": 0,
+    "refined_centers_generated": 0,
+    "refined_centers_unique": 0,
+    "full_bsfs_centers_evaluated": 1
+  },
+  "timing": {
+    "time_load": 6.94,
+    "time_center_generation": 0.0,
+    "time_center_screening": 0.0,
+    "time_center_refinement": 0.0,
+    "time_bsfs": 142.77,
+    "time_to_first_feasible": 142.77,
+    "time_yaw_refinement": 0.0,
+    "time_final_witness": 0.0,
+    "total_runtime": 163.64
+  },
+  "bsfs_stats": {
+    "oracle_certifications": 928,
+    "node_expansions": 19,
+    "hard_prunes": 565,
+    "hall_prunes": 0,
+    "propagation_prunes": 0,
+    "beam_width": 6,
+    "max_depth_certified": 4
+  },
+  "witness": {
+    "witness_retries_configured": 3,
+    "full_witness_calls": 6,
+    "witness_attempts_total": 6,
+    "cached_witness_reuses": 1,
+    "configured_retries": 3,
+    "attempts": [
+      {
+        "retry": 0,
+        "seed": 413490972,
+        "result": "SUCCESS"
+      }
+    ],
+    "successful_retry_index": 0,
+    "reused_from_cache": true,
+    "fingerprint": "C0.3730,0.0000|leg_bl:0.3538,0.1203:identity|leg_br:0.4340,-0.2005:identity|leg_fl:0.1934,0.1203:rot90_08|leg_fr:0.1934,-0.2005:identity|beam|0.08|8|1|6|0.1|0.005|0.001|False|False|seat,leg_bl,leg_br,leg_fl,leg_fr",
+    "seeds": [
+      413490972
+    ]
+  },
+  "grasp_robustness": {
+    "per_step_common_grasp_count": {
+      "leg_bl": 4,
+      "leg_br": 4,
+      "leg_fl": 4,
+      "leg_fr": 4
+    },
+    "min_common_grasp_count": 4
+  },
+  "per_step_certification": {
+    "leg_fr": {
+      "pid": "leg_fr",
+      "xy": [
+        0.19340000008046626,
+        -0.20049999959766862
+      ],
+      "rot_name": "identity",
+      "pose_tag": "identity",
+      "arm": "lft",
+      "gids": [
+        28,
+        87,
+        123,
+        101
+      ],
+      "footprint": [
+        0.039000000804662704,
+        0.039000000804662704
+      ],
+      "common_grasp_count": 4,
+      "manipulability": 0.0036712302766231195,
+      "clearance": 0.2691772832349744,
+      "dist_to_goal": 0.17041833785527102,
+      "cost": 0.687152447611474,
+      "cost_lb": 0.1707114813870271,
+      "certified": true,
+      "yaw_deg": 0.0
+    },
+    "leg_fl": {
+      "pid": "leg_fl",
+      "xy": [
+        0.19340000008046626,
+        0.12029999975860117
+      ],
+      "rot_name": "rot90_08",
+      "pose_tag": "rot90_lifted",
+      "arm": "lft",
+      "gids": [
+        374,
+        80,
+        310,
+        157
+      ],
+      "footprint": [
+        0.03900000080466271,
+        0.15999999642372134
+      ],
+      "common_grasp_count": 4,
+      "manipulability": 0.004517521189663964,
+      "clearance": 0.2161671804715414,
+      "dist_to_goal": 0.12059125158185013,
+      "cost": 0.5598114421464186,
+      "cost_lb": 0.12096487079198394,
+      "certified": true,
+      "yaw_deg": 0.0
+    },
+    "leg_br": {
+      "pid": "leg_br",
+      "xy": [
+        0.4339999995976686,
+        -0.20049999959766862
+      ],
+      "rot_name": "identity",
+      "pose_tag": "identity",
+      "arm": "lft",
+      "gids": [
+        189,
+        209,
+        216,
+        1
+      ],
+      "footprint": [
+        0.039000000804662704,
+        0.039000000804662704
+      ],
+      "common_grasp_count": 4,
+      "manipulability": 0.01455996603464774,
+      "clearance": 0.2095739721186309,
+      "dist_to_goal": 0.13080997631004096,
+      "cost": 0.8179966609729457,
+      "cost_lb": 0.13119165332532964,
+      "certified": true,
+      "yaw_deg": 0.0
+    },
+    "leg_bl": {
+      "pid": "leg_bl",
+      "xy": [
+        0.35379999975860116,
+        0.12029999975860117
+      ],
+      "rot_name": "identity",
+      "pose_tag": "identity",
+      "arm": "lft",
+      "gids": [
+        209,
+        189,
+        216,
+        58
+      ],
+      "footprint": [
+        0.039000000804662704,
+        0.039000000804662704
+      ],
+      "common_grasp_count": 4,
+      "manipulability": 0.010794385269347666,
+      "clearance": 0.12182253466083012,
+      "dist_to_goal": 0.10240473631029393,
+      "cost": 0.6807771949020998,
+      "cost_lb": 0.10289183650212892,
+      "certified": true,
+      "yaw_deg": 0.0
+    }
+  },
+  "assembly_center": [
+    0.373,
+    0.0,
+    0.0
+  ],
+  "layout_score": 0.3370092743082745,
+  "total_cost": 2.745737745632938,
+  "l2_pass": true,
+  "l3_pass": false,
+  "preassembled_part": "seat",
+  "picked_parts": [
+    "leg_bl",
+    "leg_br",
+    "leg_fl",
+    "leg_fr"
+  ],
+  "best_layout": {
+    "leg_bl": {
+      "init_pos": [
+        0.35379999975860116,
+        0.12029999975860117,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "identity",
+      "arm_choice": "lft",
+      "grasp_count": 4,
+      "manipulability": 0.010794385269347666,
+      "dist_to_goal": 0.10289183650212892,
+      "rot_name": "identity",
+      "yaw_deg": 0.0,
+      "gids": [
+        209,
+        189,
+        216,
+        58
+      ]
+    },
+    "leg_br": {
+      "init_pos": [
+        0.4339999995976686,
+        -0.20049999959766862,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "identity",
+      "arm_choice": "lft",
+      "grasp_count": 4,
+      "manipulability": 0.014560099424159869,
+      "dist_to_goal": 0.13119165332532964,
+      "rot_name": "identity",
+      "yaw_deg": 0.0,
+      "gids": [
+        189,
+        209,
+        216,
+        1
+      ]
+    },
+    "leg_fl": {
+      "init_pos": [
+        0.19340000008046626,
+        0.12029999975860117,
+        0.029500000402331354
+      ],
+      "init_rotmat": [
+        1.0000000000000002,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0000000000000002,
+        0.0,
+        -1.0000000000000002,
+        0.0
+      ],
+      "pose_tag": "rot90_lifted",
+      "arm_choice": "lft",
+      "grasp_count": 4,
+      "manipulability": 0.004517444321734977,
+      "dist_to_goal": 0.12096487079198394,
+      "rot_name": "rot90_08",
+      "yaw_deg": 0.0,
+      "gids": [
+        374,
+        80,
+        310,
+        157
+      ]
+    },
+    "leg_fr": {
+      "init_pos": [
+        0.19340000008046626,
+        -0.20049999959766862,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "identity",
+      "arm_choice": "lft",
+      "grasp_count": 4,
+      "manipulability": 0.0036712568297190373,
+      "dist_to_goal": 0.1707114813870271,
+      "rot_name": "identity",
+      "yaw_deg": 0.0,
+      "gids": [
+        28,
+        87,
+        123,
+        101
+      ]
+    },
+    "seat": {
+      "init_pos": [
+        0.373,
+        0.0,
+        0.0
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "preassembled_at_assembly_region",
+      "arm_choice": "preassembled",
+      "grasp_count": 20,
+      "manipulability": 0.0,
+      "dist_to_goal": 0.0
+    }
+  }
+}

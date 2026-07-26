@@ -1,0 +1,483 @@
+{
+  "method": "BSFS-beam",
+  "asmdef": "sealp/assembly_sequence/_demo_output/topdown_tower.asmdef",
+  "num_parts": 7,
+  "witness_status": "L2_PASS",
+  "objective_cost": 4.473339853057048,
+  "layout_fingerprint": "C0.3760,-0.0550|post_br:0.4415,0.2080:identity_y000|post_fr:0.4415,-0.2080:identity_y000|post_bl:0.1919,0.2080:identity_y000|post_fl:0.1919,-0.1248:identity_y000|middle_plate:0.2335,0.1255:rot90_04_y000|top_cross:0.2740,0.0703:identity_y000|beam|0.07|8|1|5|0.1|0.005|0.001|False|False|base_plate,post_br,post_fr,post_bl,post_fl,middle_plate,top_cross",
+  "execution": {
+    "workers": 8,
+    "parallel_level": "candidates",
+    "center_search_mode": "single",
+    "seed": 0,
+    "worker_tasks_submitted": 1430,
+    "worker_tasks_completed": 1430
+  },
+  "center_search": {
+    "mode": "single",
+    "stage2_skipped": true,
+    "stage3_skipped": true,
+    "stage4_skipped": true,
+    "coarse_centers_total": 0,
+    "coarse_centers_hard_rejected": 0,
+    "coarse_centers_survived": 0,
+    "coarse_centers_retained": 0,
+    "refined_centers_generated": 0,
+    "refined_centers_unique": 0,
+    "full_bsfs_centers_evaluated": 1
+  },
+  "timing": {
+    "time_load": 7.38,
+    "time_center_generation": 0.0,
+    "time_center_screening": 0.0,
+    "time_center_refinement": 0.0,
+    "time_bsfs": 247.66,
+    "time_to_first_feasible": 247.66,
+    "time_yaw_refinement": 323.75,
+    "time_final_witness": 8.33,
+    "total_runtime": 596.97
+  },
+  "bsfs_stats": {
+    "oracle_certifications": 1424,
+    "node_expansions": 26,
+    "hard_prunes": 939,
+    "hall_prunes": 0,
+    "propagation_prunes": 0,
+    "beam_width": 5,
+    "max_depth_certified": 6
+  },
+  "witness": {
+    "witness_retries_configured": 5,
+    "full_witness_calls": 6,
+    "witness_attempts_total": 6,
+    "cached_witness_reuses": 0,
+    "configured_retries": 5,
+    "attempts": [
+      {
+        "retry": 0,
+        "seed": 782106140,
+        "result": "SUCCESS"
+      }
+    ],
+    "successful_retry_index": 0,
+    "reused_from_cache": false,
+    "fingerprint": "C0.3760,-0.0550|post_br:0.4415,0.2080:identity_y000|post_fr:0.4415,-0.2080:identity_y000|post_bl:0.1919,0.2080:identity_y000|post_fl:0.1919,-0.1248:identity_y000|middle_plate:0.2335,0.1255:rot90_04_y000|top_cross:0.2740,0.0703:identity_y000|beam|0.07|8|1|5|0.1|0.005|0.001|False|False|base_plate,post_br,post_fr,post_bl,post_fl,middle_plate,top_cross",
+    "seeds": [
+      782106140
+    ]
+  },
+  "grasp_robustness": {
+    "per_step_common_grasp_count": {
+      "top_cross": 4,
+      "middle_plate": 4,
+      "post_fl": 4,
+      "post_bl": 4,
+      "post_fr": 4,
+      "post_br": 4
+    },
+    "min_common_grasp_count": 4
+  },
+  "per_step_certification": {
+    "top_cross": {
+      "pid": "top_cross",
+      "xy": [
+        0.2740319380468658,
+        0.07033333346247675
+      ],
+      "rot_name": "identity_y000",
+      "pose_tag": "fs_yaw",
+      "arm": "lft",
+      "gids": [
+        242,
+        84,
+        156,
+        115
+      ],
+      "footprint": [
+        0.06750000268220901,
+        0.017999999225139618
+      ],
+      "common_grasp_count": 4,
+      "manipulability": 0.006554357485470352,
+      "clearance": 0.1615732964796306,
+      "dist_to_goal": 0.1615732964796306,
+      "cost": 0.6760305177359582,
+      "cost_lb": 0.2190779145310969,
+      "certified": true,
+      "yaw_deg": 0.0
+    },
+    "middle_plate": {
+      "pid": "middle_plate",
+      "xy": [
+        0.23349999999999999,
+        0.12551999983191486
+      ],
+      "rot_name": "rot90_04_y000",
+      "pose_tag": "fs_yaw",
+      "arm": "lft",
+      "gids": [
+        6,
+        1,
+        86,
+        80
+      ],
+      "footprint": [
+        0.16500000655651095,
+        0.021600000560283664
+      ],
+      "common_grasp_count": 4,
+      "manipulability": 0.003418386440554364,
+      "clearance": 0.06847193692898311,
+      "dist_to_goal": 0.22998634815856908,
+      "cost": 0.7263834283932799,
+      "cost_lb": 0.24258162141070574,
+      "certified": true,
+      "yaw_deg": 0.0
+    },
+    "post_fl": {
+      "pid": "post_fl",
+      "xy": [
+        0.19190166671574116,
+        -0.1247949998527765
+      ],
+      "rot_name": "identity_y000",
+      "pose_tag": "fs_yaw",
+      "arm": "lft",
+      "gids": [
+        93,
+        76,
+        5,
+        72
+      ],
+      "footprint": [
+        0.024016667157411575,
+        0.024016667157411575
+      ],
+      "common_grasp_count": 4,
+      "manipulability": 0.018126976468012413,
+      "clearance": 0.19688458122080338,
+      "dist_to_goal": 0.12217452002403124,
+      "cost": 0.6053008272834062,
+      "cost_lb": 0.12219343617028867,
+      "certified": true,
+      "yaw_deg": 0.0
+    },
+    "post_bl": {
+      "pid": "post_bl",
+      "xy": [
+        0.19190166671574116,
+        0.20799166642129419
+      ],
+      "rot_name": "identity_y000",
+      "pose_tag": "fs_yaw",
+      "arm": "lft",
+      "gids": [
+        119,
+        97,
+        87,
+        37
+      ],
+      "footprint": [
+        0.024016667157411575,
+        0.024016667157411575
+      ],
+      "common_grasp_count": 4,
+      "manipulability": 0.016069590303422324,
+      "clearance": 0.09236881033150758,
+      "dist_to_goal": 0.24572995941739,
+      "cost": 0.7531033754073091,
+      "cost_lb": 0.24573936488741918,
+      "certified": true,
+      "yaw_deg": 0.0
+    },
+    "post_fr": {
+      "pid": "post_fr",
+      "xy": [
+        0.44149166642129417,
+        -0.20799166642129419
+      ],
+      "rot_name": "identity_y000",
+      "pose_tag": "fs_yaw",
+      "arm": "lft",
+      "gids": [
+        97,
+        142,
+        184,
+        235
+      ],
+      "footprint": [
+        0.024016667157411575,
+        0.024016667157411575
+      ],
+      "common_grasp_count": 4,
+      "manipulability": 0.016045926246102453,
+      "clearance": 0.16641997585927787,
+      "dist_to_goal": 0.10425621525938603,
+      "cost": 0.8140789279330958,
+      "cost_lb": 0.10427838184499909,
+      "certified": true,
+      "yaw_deg": 0.0
+    },
+    "post_br": {
+      "pid": "post_br",
+      "xy": [
+        0.44149166642129417,
+        0.20799166642129419
+      ],
+      "rot_name": "identity_y000",
+      "pose_tag": "fs_yaw",
+      "arm": "lft",
+      "gids": [
+        97,
+        142,
+        184,
+        235
+      ],
+      "footprint": [
+        0.024016667157411575,
+        0.024016667157411575
+      ],
+      "common_grasp_count": 4,
+      "manipulability": 0.016020339493383294,
+      "clearance": 0.21677771393812134,
+      "dist_to_goal": 0.21424874569736962,
+      "cost": 0.8984427763039994,
+      "cost_lb": 0.21425953312022353,
+      "certified": true,
+      "yaw_deg": 0.0
+    }
+  },
+  "assembly_center": [
+    0.376,
+    -0.055,
+    0.0
+  ],
+  "layout_score": 0.3764479262879351,
+  "total_cost": 4.473339853057048,
+  "l2_pass": true,
+  "l3_pass": false,
+  "preassembled_part": "base_plate",
+  "picked_parts": [
+    "top_cross",
+    "middle_plate",
+    "post_fl",
+    "post_bl",
+    "post_fr",
+    "post_br"
+  ],
+  "best_layout": {
+    "top_cross": {
+      "init_pos": [
+        0.2740319380468658,
+        0.07033333346247675,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "fs_yaw",
+      "arm_choice": "lft",
+      "grasp_count": 4,
+      "manipulability": 0.006554357485470352,
+      "dist_to_goal": 0.2190779145310969,
+      "rot_name": "identity_y000",
+      "yaw_deg": 0.0,
+      "gids": [
+        242,
+        84,
+        156,
+        115
+      ]
+    },
+    "middle_plate": {
+      "init_pos": [
+        0.23349999999999999,
+        0.12551999983191486,
+        0.0699999986588955
+      ],
+      "init_rotmat": [
+        1.0000000000000002,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        -1.0000000000000002,
+        0.0,
+        1.0000000000000002,
+        0.0
+      ],
+      "pose_tag": "fs_yaw",
+      "arm_choice": "lft",
+      "grasp_count": 4,
+      "manipulability": 0.003418324338086991,
+      "dist_to_goal": 0.24258162141070574,
+      "rot_name": "rot90_04_y000",
+      "yaw_deg": 0.0,
+      "gids": [
+        6,
+        1,
+        86,
+        80
+      ]
+    },
+    "post_fl": {
+      "init_pos": [
+        0.19190166671574116,
+        -0.1247949998527765,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "fs_yaw",
+      "arm_choice": "lft",
+      "grasp_count": 4,
+      "manipulability": 0.018126976468012413,
+      "dist_to_goal": 0.12219343617028867,
+      "rot_name": "identity_y000",
+      "yaw_deg": 0.0,
+      "gids": [
+        93,
+        76,
+        5,
+        72
+      ]
+    },
+    "post_bl": {
+      "init_pos": [
+        0.19190166671574116,
+        0.20799166642129419,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "fs_yaw",
+      "arm_choice": "lft",
+      "grasp_count": 4,
+      "manipulability": 0.0160696480673112,
+      "dist_to_goal": 0.24573936488741918,
+      "rot_name": "identity_y000",
+      "yaw_deg": 0.0,
+      "gids": [
+        119,
+        97,
+        87,
+        37
+      ]
+    },
+    "post_fr": {
+      "init_pos": [
+        0.44149166642129417,
+        -0.20799166642129419,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "fs_yaw",
+      "arm_choice": "lft",
+      "grasp_count": 4,
+      "manipulability": 0.016045926246102453,
+      "dist_to_goal": 0.10427838184499909,
+      "rot_name": "identity_y000",
+      "yaw_deg": 0.0,
+      "gids": [
+        97,
+        142,
+        184,
+        235
+      ]
+    },
+    "post_br": {
+      "init_pos": [
+        0.44149166642129417,
+        0.20799166642129419,
+        0.01
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "fs_yaw",
+      "arm_choice": "lft",
+      "grasp_count": 4,
+      "manipulability": 0.016020269600816376,
+      "dist_to_goal": 0.21425953312022353,
+      "rot_name": "identity_y000",
+      "yaw_deg": 0.0,
+      "gids": [
+        97,
+        142,
+        184,
+        235
+      ]
+    },
+    "base_plate": {
+      "init_pos": [
+        0.376,
+        -0.055,
+        0.0
+      ],
+      "init_rotmat": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "pose_tag": "preassembled_at_assembly_region",
+      "arm_choice": "preassembled",
+      "grasp_count": 20,
+      "manipulability": 0.0,
+      "dist_to_goal": 0.0
+    }
+  },
+  "exp_order": "backward",
+  "exp_state": "sequential",
+  "exp_passes_run": 1,
+  "exp_prior_converged": false
+}

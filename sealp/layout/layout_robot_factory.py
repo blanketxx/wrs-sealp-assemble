@@ -33,10 +33,8 @@ def create_layout_robot(
     rotmat = np.asarray(robot_base_rotmat, dtype=float)
     if single_arm:
         arm = PantheraHTSglArm(pos=pos, rotmat=rotmat, enable_cc=enable_cc)
-        try:
-            arm.setup_cc()
-        except Exception:
-            pass
+        # setup_cc() already runs inside PantheraHTSglArm.__init__; calling it again
+        # duplicates CC entries and makes is_collided() falsely reject all grasps.
         robot = _SingleArmRobotShell(arm)
         return LayoutRobotBundle(
             robot=robot,
@@ -50,10 +48,9 @@ def create_layout_robot(
         arm_y_offset=float(dual_arm_y_offset),
         enable_cc=enable_cc,
     )
-    try:
-        robot.setup_cc()
-    except Exception:
-        pass
+    # Do not call robot.setup_cc() here: each sub-arm already has its own CC from
+    # PantheraHTSglArm.__init__, and the dual shared CC makes common-grasp checks
+    # falsely report collisions during single-arm-at-a-time layout planning.
     return LayoutRobotBundle(
         robot=robot,
         single_arm=False,
@@ -80,6 +77,9 @@ class _SingleArmRobotShell:
 
     def use_all(self):
         self.delegator = None
+
+    def gen_meshmodel(self, **kwargs):
+        return self.lft_arm.gen_meshmodel(**kwargs)
 
 
 def iter_layout_arms(robot, *, single_arm: bool) -> List[object]:

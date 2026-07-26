@@ -399,21 +399,37 @@ P4X_CELLS = (
 )
 
 
+# P4x budget. The claim being tested is only "the frozen backward beam returns a
+# layout that passes L2 AND the staging_aware full-sequence L3 on these products",
+# so it uses ONE predetermined center instead of P4's coarse-to-fine sweep -- the
+# center search costs most of P4's wall-clock and is irrelevant to a feasibility
+# claim. Yaw refinement stays ON: it is what decides each part's final heading,
+# and P1b showed yaw-OFF layouts failing L3 at a mid-sequence step, so a yaw-off
+# run could not support an executability claim.
+_P4X_SINGLE = [
+    "--mode", "beam", "--center-search", "single",
+    "--goal-pos", "0.373,0.0,0.0",
+    "--grid-spacing", "0.08", "--cand-per-part", "6", "--beam-width", "4",
+    "--poses-per-xy", "1", "--yaw-step-deg", "20", "--witness-retries", "5",
+    "--workers", "12", "--parallel-level", "auto",
+]
+
+
 def _p4x_passthrough(asmdef: str, grasp_dir: str, parts: str) -> List[str]:
     return ["--asmdef", asmdef, "--grasp-dir", grasp_dir,
-            "--part-order", parts, "--goal-pos", "0.373,0.0,0.0"] + _COARSE_TO_FINE
+            "--part-order", parts] + _P4X_SINGLE
 
 
 def build_p4x() -> List[Dict]:
-    # Cross-assembly on the generated 60x60 products, exactly the P4 recipe:
-    # frozen backward beam, coarse-to-fine center search, seed 0, then the
-    # staging_aware full-sequence L3 on whatever layout the search commits to.
-    # P4 itself is untouched so its chair/tower rows stay reproducible.
+    # Cross-assembly feasibility on the generated 60x60 products: the frozen
+    # backward beam, sequential state, seed 0, then the staging_aware
+    # full-sequence L3 on whatever layout the search commits to. P4 itself is
+    # untouched so its chair/tower rows stay reproducible.
     #
-    # These products are the harder cross-assembly evidence: the chair stages
-    # four thin legs and the tower six parts, whereas stack_cube and spire_tower
-    # stage nine each, and both mate along five distinct directions instead of
-    # top-down only. Ordered cheapest first (6, then 10, then 10 parts).
+    # These products are harder staging instances than the chair or tower: the
+    # chair stages four thin legs and the tower six parts, whereas stack_cube and
+    # spire_tower stage nine each, and both mate along five distinct directions
+    # instead of top-down only. Ordered cheapest first (6, then 10, then 10).
     return [
         _spec("p4x", variant, variant, 0,
               _p4x_passthrough(asmdef, grasps, parts),

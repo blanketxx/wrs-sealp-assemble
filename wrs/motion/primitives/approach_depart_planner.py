@@ -467,6 +467,7 @@ class ADPlanner(object):
                                             linear_granularity=.03,
                                             obstacle_list=None,
                                             object_list=None,
+                                            rrt_obstacle_list=None,
                                             use_rrt=True,
                                             toggle_dbg=False):
         """
@@ -483,6 +484,7 @@ class ADPlanner(object):
         :param linear_granularity:
         :param obstacle_list: obstacles, will be checked by both rrt and linear
         :param object_list: target objects, will be checked by rrt, but not by linear
+        :param rrt_obstacle_list: obstacles for the rrt section only; ``None`` reuses ``obstacle_list``.
         :param use_rrt
         :return:
         author: weiwei
@@ -507,6 +509,7 @@ class ADPlanner(object):
                                                            linear_granularity=linear_granularity,
                                                            obstacle_list=obstacle_list,
                                                            object_list=object_list,
+                                                           rrt_obstacle_list=rrt_obstacle_list,
                                                            use_rrt=use_rrt,
                                                            toggle_dbg=toggle_dbg)
             if app_mot_data is None:
@@ -524,6 +527,7 @@ class ADPlanner(object):
                                    ee_values=None,
                                    obstacle_list=None,
                                    object_list=None,
+                                   rrt_obstacle_list=None,
                                    use_rrt=True,
                                    toggle_dbg=False):
         """
@@ -535,6 +539,9 @@ class ADPlanner(object):
         :param ee_values:
         :param obstacle_list: obstacles, will be checked by both rrt and linear
         :param object_list: target objects, will be checked by rrt, but not by linear
+        :param rrt_obstacle_list: obstacles for the rrt section only; ``None`` reuses ``obstacle_list``.
+            Same split as :meth:`gen_approach_depart`, so a caller can exempt the parts the object seats
+            against on the linear section while keeping the transit strict.
         :param use_rrt
         :return:
         """
@@ -542,6 +549,7 @@ class ADPlanner(object):
             obstacle_list = []
         if object_list is None:
             object_list = []
+        rrt_obs = obstacle_list if rrt_obstacle_list is None else list(rrt_obstacle_list)
         linear_app = self.gen_linear_approach_to_given_conf(goal_jnt_values=goal_jnt_values,
                                                             direction=linear_direction,
                                                             distance=linear_distance,
@@ -561,7 +569,7 @@ class ADPlanner(object):
                 self.robot.change_ee_values(ee_values=ee_values)
             start2app = self.rrtc_planner.plan(start_conf=start_jnt_values,
                                                goal_conf=linear_app.jv_list[0],
-                                               obstacle_list=obstacle_list + object_list,
+                                               obstacle_list=rrt_obs + object_list,
                                                ext_dist=.1,
                                                max_time=100,
                                                toggle_dbg=toggle_dbg)
@@ -570,7 +578,7 @@ class ADPlanner(object):
         else:
             start2app = self.im_planner.gen_interplated_between_given_conf(start_jnt_values=start_jnt_values,
                                                                            end_jnt_values=linear_app.jv_list[0],
-                                                                           obstacle_list=obstacle_list + object_list,
+                                                                           obstacle_list=rrt_obs + object_list,
                                                                            ee_values=ee_values,
                                                                            toggle_dbg=toggle_dbg)
         if start2app is None:
@@ -587,6 +595,7 @@ class ADPlanner(object):
                                    ee_values=None,
                                    obstacle_list=None,
                                    object_list=None,
+                                   rrt_obstacle_list=None,
                                    use_rrt=True,
                                    toggle_dbg=False):
         """
@@ -598,6 +607,7 @@ class ADPlanner(object):
         :param ee_values:
         :param obstacle_list: obstacles, will be checked by both rrt and linear
         :param object_list: target objects, will be checked by rrt, but not by linear
+        :param rrt_obstacle_list: obstacles for the rrt section only; ``None`` reuses ``obstacle_list``.
         :param use_rrt
         :return:
         """
@@ -605,6 +615,7 @@ class ADPlanner(object):
             obstacle_list = []
         if object_list is None:
             object_list = []
+        rrt_obs = obstacle_list if rrt_obstacle_list is None else list(rrt_obstacle_list)
         linear_dep = self.gen_linear_depart_from_given_conf(start_jnt_values=start_jnt_values,
                                                             direction=linear_direction,
                                                             distance=linear_distance,
@@ -624,7 +635,7 @@ class ADPlanner(object):
                 self.robot.change_ee_values(ee_values=ee_values)
             dep2end = self.rrtc_planner.plan(start_conf=linear_dep.jv_list[-1],
                                              goal_conf=end_jnt_values,
-                                             obstacle_list=obstacle_list + object_list,
+                                             obstacle_list=rrt_obs + object_list,
                                              ext_dist=.1,
                                              max_time=100,
                                              toggle_dbg=toggle_dbg)
@@ -636,7 +647,7 @@ class ADPlanner(object):
         else:
             dep2end = self.im_planner.gen_interplated_between_given_conf(start_jnt_values=linear_dep.jv_list[-1],
                                                                          end_jnt_values=end_jnt_values,
-                                                                         obstacle_list=obstacle_list + object_list,
+                                                                         obstacle_list=rrt_obs + object_list,
                                                                          ee_values=ee_values,
                                                                          toggle_dbg=toggle_dbg)
             if dep2end is None:

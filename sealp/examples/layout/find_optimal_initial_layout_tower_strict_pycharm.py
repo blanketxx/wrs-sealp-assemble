@@ -88,6 +88,8 @@ from sealp.colliders import StaticEnvironment
 from sealp.layout import WorkspaceLayout
 from sealp.layout.dual_staging_search import find_obstacle_def
 from sealp.primitives.transport import TransportPrimitive
+from sealp.primitives.direct_transport import DirectTransportPrimitive
+from sealp.primitives.regrasp import SingleArmRegraspPrimitive
 
 try:
     from sealp.layout.reachability import check_pose_reachability
@@ -195,9 +197,19 @@ DEFAULT_ENFORCE_ORDER_X_CONSTRAINT = True
 DEFAULT_ORDER_X_TOLERANCE = 0.03
 DEFAULT_ENABLE_Y_SIDE_DISTRIBUTION_SCORE = True
 
-# 如果某个零件在原始姿态下“夹爪朝世界 -Z 方向”的抓取数太少，
-# 则搜索时强制选择 upright / 侧立候选姿态，不再允许 identity / 平放姿态。
-DEFAULT_PREFER_UPRIGHT_WHEN_TOPDOWN_LOW = True
+# upright 规则(默认关闭)。
+#
+# 开启时: 某零件在原始姿态下“夹爪朝世界 -Z”的抓取数 < topdown_min_count，就强制
+# 它的初始姿态必须是 upright / 侧立候选，identity / 平放直接从候选里删掉。
+#
+# 关闭原因: 该规则只看暂存端“抓得起来”，不看目标端“放得下去”。middle_plate
+# (topdown=0) 因此被迫立在 21.6mm 窄边上，而它必须平放着落到四根柱子上——同一个
+# 抓取要同时服务“立着的暂存位”和“平放的目标位”，这在单臂下无解(tower_smoke.pkl
+# 里这一步是靠双臂 handover_rgt_to_lft 用两个抓取才做成的)，p4 tower 于是稳定
+# 卡在 step=5 middle_plate。平放暂存时暂存姿态与目标姿态一致，同一个水平抓取两端
+# 通用，反而是唯一可执行的选择。可行性交给 L2/witness 判定。
+# `--enable-upright-preference` 可复现旧行为。
+DEFAULT_PREFER_UPRIGHT_WHEN_TOPDOWN_LOW = False
 DEFAULT_TOPDOWN_MIN_COUNT = 10
 DEFAULT_TOPDOWN_ALIGN_COS = 0.82
 
@@ -264,6 +276,24 @@ DEFAULT_L3_OBSTACLE_MODE = "staging_aware"
 # 其余零件照常严格验证。
 DEFAULT_L3_SKIP_PARTS = "middle_plate"
 DEFAULT_ALLOW_L2_FALLBACK = True
+
+# 强制直线取放失败后, 允许改用"无强制 Cartesian 直线段"单臂规划的零件(逗号分隔, "*" = 全部)。
+#
+# TransportPrimitive 一定会在取放前后各生成一段直线, 要求沿线每个插值位姿都有 IK, 并且
+# gen_rel_linear_motion_with_given_conf 还要求相邻插值点关节差 <= 45 度。middle_plate 的所有
+# common grasp 都是死在 `IK not solvable in gen_linear_motion` 上, 而不是 RRT 无解;
+# 把 distance 调小甚至调成 0 也没用, 因为 distance=0 时 start_tcp_pos == goal_tcp_pos,
+# gen_linear_motion 仍会被调用并重解 IK。
+#
+# DirectTransportPrimitive 用同一只手臂、同一个 grasp, 以认证过的 q_pick/q_place 为锚点
+# 用 RRT 连接, 并逐点审计"接触只能出现在接近段末尾/撤离段开头", 因此不穿模的保证仍在,
+# 只是不再强行要求运动是直线。空字符串 = 关闭。
+DEFAULT_L3_LINEAR_FREE_PARTS = "middle_plate"
+
+# 单臂 regrasp(桌面放下换抓取再拿起)适用的零件。默认关闭: 真机验证过的 middle_plate 轨迹
+# 全程只有一个抓取、没有中途放下, 所以它不是解释该零件的正确机制, 仅作为显式选项保留,
+# 用于暂存朝向与目标朝向之间确实不存在共同抓取的装配体。
+DEFAULT_L3_REGRASP_PARTS = ""
 
 # ---- 默认姿态保持 (default resting-face / STL up-face preservation) ----
 # 泛化性软偏好: 对"有指向性"的件(细长杆 / 扁平板), 在没有 topdown 硬约束时,
@@ -844,6 +874,8 @@ class WeightedInitialLayoutSearcher:
                  l2_pick_check_tilt: float = DEFAULT_L2_PICK_CHECK_TILT,
                  robot_home_clearance: float = DEFAULT_ROBOT_HOME_CLEARANCE,
                  l3_skip_parts: Optional[List[str]] = None,
+                 l3_linear_free_parts: Optional[List[str]] = None,
+                 l3_regrasp_parts: Optional[List[str]] = None,
                  prefer_stl_upface: bool = DEFAULT_PREFER_STL_UPFACE,
                  w_stl_upface: float = DEFAULT_W_STL_UPFACE,
                  stl_upface_min_thinness: float = DEFAULT_STL_UPFACE_MIN_THINNESS):
@@ -897,6 +929,18 @@ class WeightedInitialLayoutSearcher:
         self.robot_home_clearance = max(0.0, float(robot_home_clearance))
         # L3 全流程验证时跳过运动规划的零件(见 DEFAULT_L3_SKIP_PARTS 注释)。
         self.l3_skip_parts = set(l3_skip_parts or [])
+        # 允许改用无强制直线段单臂规划的零件(见 DEFAULT_L3_LINEAR_FREE_PARTS 注释)。
+        self.l3_linear_free_parts = set(
+            l3_linear_free_parts if l3_linear_free_parts is not None
+            else _parse_part_order(DEFAULT_L3_LINEAR_FREE_PARTS) or []
+        )
+        # 单臂 pick-place 失败后允许尝试单臂 regrasp 的零件(见 DEFAULT_L3_REGRASP_PARTS 注释)。
+        self.l3_regrasp_parts = set(
+            l3_regrasp_parts if l3_regrasp_parts is not None
+            else _parse_part_order(DEFAULT_L3_REGRASP_PARTS) or []
+        )
+        self._direct_cache = {}
+        self._regrasp_cache = {}
         self._home_robot_aabbs_cache = None
 
         self.mesh_vertices: Dict[str, np.ndarray] = {}
@@ -3152,6 +3196,12 @@ class WeightedInitialLayoutSearcher:
             (0.015, 0.015, 0.015),
             (0.01, 0.01, 0.01),
         ]
+        # 缩短直线段只能缓解、不能消除"沿线每点都要有 IK + 相邻点关节差<=45度"这两个约束
+        # (distance 一路缩到 0 时 gen_linear_motion 仍会被调用并重解 IK)。对已经允许走
+        # 无强制直线段规划的零件, 跑完整 5 档纯属浪费(middle_plate 单件就要 ~24 分钟),
+        # 只保留标称档: 强制直线能过就仍然用它, 过不了直接交给无直线段规划器。
+        if self._l3_uses_linear_free(pid):
+            dist_schedule = dist_schedule[:1]
         last_err = "no plan"
         for pdd, pad, pdd2 in dist_schedule:
             tk = _transport_kwargs(place_approach_dir=place_approach_dir,
@@ -3197,10 +3247,132 @@ class WeightedInitialLayoutSearcher:
                 return True
             last_err = getattr(res, "error_msg", "") or "no plan"
 
+        # 兜底 1: 去掉强制 Cartesian 直线段的单臂规划器。
+        #
+        # TransportPrimitive 一定会在取放前后各插一段直线(pick approach/depart、place
+        # approach/depart), 每段都要求"沿线每一个插值位姿都有 IK", 而
+        # gen_rel_linear_motion_with_given_conf 还额外要求相邻插值点关节差 <= 45 度。
+        # 这两条比"抓取点本身可达"强得多, middle_plate 的 common grasp 就是全部死在
+        # `IK not solvable in gen_linear_motion` 上 —— 不是 RRT 找不到路。
+        # 把距离改小(甚至改成 0)都没用: distance=0 时 start_tcp_pos = goal_tcp_pos,
+        # gen_linear_motion 照样被调用、照样重解 IK, 只是线变短了。必须真的不生成这段。
+        #
+        # DirectTransportPrimitive 保持同一只手臂、同一个 grasp, 直接以认证过的
+        # q_pick / q_place 为锚点用 RRT 连接; IK、关节限位、机器人/物体碰撞照旧严格检查,
+        # 并且逐点审计"接触只能出现在接近段末尾/撤离段开头", 因此直线段原本保证的
+        # "不穿过物体和装配件"仍然成立, 只是不再规定运动必须是直线。
+        # 这与真机验证过的那条单臂轨迹口径一致(它同样没有强制直线 approach/depart)。
+        if self._l3_uses_linear_free(pid):
+            direct = self._direct_primitive(arm_tag)
+            tk = _transport_kwargs(place_approach_dir=place_approach_dir,
+                                   place_depart_dir=place_depart_dir,
+                                   pick_depart_dist=PICK_DEPART_DIST,
+                                   place_approach_dist=PLACE_APPROACH_DIST,
+                                   place_depart_dist=PLACE_DEPART_DIST)
+            if verbose:
+                print(f"  [L3] {pid} forced-linear transport exhausted; trying linear-free "
+                      f"single-arm transport (arm={arm_tag})")
+            obj_cm.pos = np.asarray(sp, dtype=float).copy()
+            obj_cm.rotmat = np.asarray(sr, dtype=float).copy()
+            try:
+                res = direct.plan(
+                    obj_cmodel=obj_cm,
+                    grasp_collection=gc,
+                    goal_pose_list=[(np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))],
+                    obstacle_list=obs,
+                    grasp_obstacle_list=placement_obs,
+                    **tk,
+                )
+            except Exception as e:
+                res = None
+                last_err = f"{last_err}; direct exception {type(e).__name__}: {e!r}"
+            if res is not None:
+                if bool(getattr(res, "success", False)):
+                    if verbose:
+                        print(f"  [L3] {pid} solved by linear-free single-arm transport "
+                              f"(same grasp, pick -> transport -> place).")
+                    return True
+                last_err = f"{last_err}; {getattr(res, 'error_msg', '') or 'direct no plan'}"
+
+        # 兜底 2(默认关闭): 单臂 regrasp。允许把零件放到桌面上换一个抓取再拿起来,
+        # 用于暂存朝向与目标朝向之间根本不存在共同抓取的情况。真机验证过的
+        # middle_plate 轨迹没有中途放下, 所以默认不启用, 只作为显式选项保留。
+        if self._l3_uses_regrasp(pid):
+            regrasp = self._regrasp_primitive(arm_tag)
+            tk = _transport_kwargs(place_approach_dir=place_approach_dir,
+                                   place_depart_dir=place_depart_dir,
+                                   pick_depart_dist=PICK_DEPART_DIST,
+                                   place_approach_dist=PLACE_APPROACH_DIST,
+                                   place_depart_dist=PLACE_DEPART_DIST)
+            if verbose:
+                print(f"  [L3] {pid} single-arm transport exhausted; trying single-arm regrasp "
+                      f"(arm={arm_tag})")
+            obj_cm.pos = np.asarray(sp, dtype=float).copy()
+            obj_cm.rotmat = np.asarray(sr, dtype=float).copy()
+            try:
+                res = regrasp.plan(
+                    obj_cmodel=obj_cm,
+                    grasp_collection=gc,
+                    goal_pose_list=[(np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))],
+                    obstacle_list=obs,
+                    grasp_obstacle_list=placement_obs,
+                    approach_distance=APPROACH_DIST,
+                    depart_distance=PICK_DEPART_DIST,
+                    linear_granularity=LINEAR_GRANULARITY,
+                    **tk,
+                )
+            except Exception as e:
+                res = None
+                last_err = f"{last_err}; regrasp exception {type(e).__name__}: {e!r}"
+            if res is not None:
+                if bool(getattr(res, "success", False)):
+                    if verbose:
+                        print(f"  [L3] {pid} solved by single-arm regrasp.")
+                    return True
+                last_err = f"{last_err}; {getattr(res, 'error_msg', '') or 'regrasp no plan'}"
+
         layout.l3_fail_reason = f"L3 step={step_idx} {pid} {arm_tag}: {last_err}"
         if verbose:
             print(f"  [FAIL] {layout.l3_fail_reason}")
         return False
+
+    def _l3_uses_linear_free(self, pid: str) -> bool:
+        """该零件是否允许在强制直线取放失败后, 改用无强制直线段的单臂 RRT 规划。"""
+        parts = getattr(self, "l3_linear_free_parts", None)
+        if not parts:
+            return False
+        return "*" in parts or pid in parts
+
+    def _l3_uses_regrasp(self, pid: str) -> bool:
+        """该零件在单臂 pick-place 失败后是否允许尝试单臂 regrasp。"""
+        parts = getattr(self, "l3_regrasp_parts", None)
+        if not parts:
+            return False
+        return "*" in parts or pid in parts
+
+    def _direct_primitive(self, arm_tag: str):
+        """按手臂缓存无强制直线段的单臂规划器。"""
+        cache = getattr(self, "_direct_cache", None)
+        if cache is None:
+            cache = {}
+            self._direct_cache = cache
+        key = "lft" if (self.single_arm_mode or arm_tag != "rgt") else "rgt"
+        if key not in cache:
+            arm = self.robot.lft_arm if key == "lft" else self.robot.rgt_arm
+            cache[key] = DirectTransportPrimitive(arm)
+        return cache[key]
+
+    def _regrasp_primitive(self, arm_tag: str):
+        """按手臂缓存单臂 regrasp 规划器(FSReferencePoses 的凸包分割较贵, 复用缓存)。"""
+        cache = getattr(self, "_regrasp_cache", None)
+        if cache is None:
+            cache = {}
+            self._regrasp_cache = cache
+        key = "lft" if (self.single_arm_mode or arm_tag != "rgt") else "rgt"
+        if key not in cache:
+            arm = self.robot.lft_arm if key == "lft" else self.robot.rgt_arm
+            cache[key] = SingleArmRegraspPrimitive(arm)
+        return cache[key]
 
 
     # --------------------------------------------------------
@@ -3393,7 +3565,7 @@ class WeightedInitialLayoutSearcher:
                     "enable_y_side_distribution_score": bool(self.enable_y_side_distribution_score),
                     "force_upright_when_topdown_low": bool(self.prefer_upright_when_topdown_low),
                     "topdown_min_count": int(self.topdown_min_count),
-                "upright_rule": "if identity topdown(-Z) count < threshold, non-upright initial poses are forbidden",
+                "upright_rule": "OFF by default; when enabled, a part whose identity topdown(-Z) count < threshold may only be staged upright",
                     "topdown_align_cos": float(self.topdown_align_cos),
                     "check_l2_pick_quick_motion": bool(self.check_l2_pick_quick_motion),
                     "l2_pick_check_parts": sorted(list(self.l2_pick_check_parts)),
@@ -3482,7 +3654,7 @@ class WeightedInitialLayoutSearcher:
                 "order_x_tolerance": float(self.order_x_tolerance),
                 "force_upright_when_topdown_low": bool(self.prefer_upright_when_topdown_low),
                 "topdown_min_count": int(self.topdown_min_count),
-                "upright_rule": "if identity topdown(-Z) count < threshold, non-upright initial poses are forbidden",
+                "upright_rule": "OFF by default; when enabled, a part whose identity topdown(-Z) count < threshold may only be staged upright",
                 "check_l2_pick_quick_motion": bool(self.check_l2_pick_quick_motion),
                 "l2_pick_check_parts": sorted(list(self.l2_pick_check_parts)),
                 "l2_pick_check_lift_dist": float(self.l2_pick_check_lift_dist),
@@ -3572,7 +3744,10 @@ def _parse_args():
     parser.add_argument("--disable-y-side-distribution-score", action="store_true",
                         help="关闭 y 方向两侧分布的小幅评分加成。")
     parser.add_argument("--disable-upright-preference", action="store_true",
-                        help="关闭 topdown 抓取不足时强制 upright / 侧立的硬约束。")
+                        help="关闭 topdown 抓取不足时强制 upright / 侧立的硬约束(现已是默认)。")
+    parser.add_argument("--enable-upright-preference", action="store_true",
+                        help="恢复旧行为: topdown 抓取不足时强制 upright / 侧立姿态。"
+                             "注意该规则只看暂存端能否抓起, 会删掉平放板件唯一可执行的姿态。")
     parser.add_argument("--topdown-min-count", type=int, default=DEFAULT_TOPDOWN_MIN_COUNT,
                         help="若原始姿态从上往下抓取数小于该值，则优先 upright，默认 10。")
     parser.add_argument("--enable-l2-pick-quick-check", action="store_true",
@@ -3637,6 +3812,14 @@ def _parse_args():
                         help="L3 全流程验证时跳过运动规划的零件，逗号分隔，默认 middle_plate。"
                              "被跳过的零件仍计入后续零件的障碍(视为已放置)，只是不对它本身做 L3 验证。"
                              "传空字符串则不跳过任何零件。")
+    parser.add_argument("--l3-linear-free-parts", default=DEFAULT_L3_LINEAR_FREE_PARTS,
+                        help="强制 Cartesian 直线取放失败后, 允许改用无强制直线段的单臂 RRT 规划的零件, "
+                             "逗号分隔, 默认 middle_plate; \"*\" = 所有零件; 空字符串 = 关闭。"
+                             "同一只手臂、同一个 grasp, IK/关节限位/碰撞照旧严格检查, 并逐点审计"
+                             "接触只出现在接近段末尾与撤离段开头。")
+    parser.add_argument("--l3-regrasp-parts", default=DEFAULT_L3_REGRASP_PARTS,
+                        help="允许尝试单臂 regrasp(桌面放下换抓取再拿起)的零件, 逗号分隔, 默认关闭; "
+                             "\"*\" = 所有零件。仅用于暂存朝向与目标朝向之间确实没有共同抓取的装配体。")
     parser.add_argument("--allow-l2-fallback", action="store_true",
                         help="如果 L3 top-k 全失败，允许回退保存 L2 最高分。不加则 L3 失败时不保存。")
 
@@ -3668,6 +3851,8 @@ def main():
     print(f"prefer STL upface = {not args.disable_prefer_stl_upface}, w={args.w_stl_upface:.2f}, min_thinness={args.stl_upface_min_thinness:.2f}  # 细长/扁平件优先保持默认站立/平放")
     print(f"L3 enable = {args.enable_l3 and not args.disable_l3}, L3 obs = {args.l3_obstacle_mode}, top_k = {args.l3_top_k}")
     print(f"L3 skip parts = {args.l3_skip_parts or '(none)'}  # skipped parts are still counted as placed obstacles")
+    print(f"L3 linear-free parts = {args.l3_linear_free_parts or '(none)'}  # same arm, same grasp, RRT-connected instead of forced Cartesian approach/depart")
+    print(f"L3 regrasp parts = {args.l3_regrasp_parts or '(none)'}  # single-arm put-down + re-grasp fallback (off by default)")
     print(f"assembly region search = {not args.disable_assembly_region_search}, grid={args.assembly_grid}, preassemble_first={not args.disable_preassemble_first}")
     print(f"assembly arm keepout   = False  # 3x3装配中心不按矩形距离过滤，只检查preassembled是否撞机械臂")
     print(f"staging arm keepout    = {not args.disable_staging_arm_keepout}, x_clearance={args.staging_arm_x_clearance:.3f}m, y_clearance={args.staging_arm_y_clearance:.3f}m")
@@ -3687,7 +3872,8 @@ def main():
     print(f"min mesh clearance     = {args.min_staging_mesh_clearance:.4f} m")
     print(f"order-x constraint     = {not args.disable_order_x_constraint}, tol={args.order_x_tolerance:.3f} m")
     print(f"y side score           = {not args.disable_y_side_distribution_score}")
-    print(f"upright hard constraint = {not args.disable_upright_preference}, topdown_min={args.topdown_min_count}")
+    _use_upright_rule = bool(args.enable_upright_preference and not args.disable_upright_preference)
+    print(f"upright hard constraint = {_use_upright_rule}, topdown_min={args.topdown_min_count}")
     _use_l2_pick_quick = bool(args.enable_l2_pick_quick_check and not args.disable_l2_pick_quick_check)
     print(f"L2 pick quick check     = {_use_l2_pick_quick}, parts={args.l2_pick_check_parts}, lift={args.l2_pick_check_lift_dist:.3f}m, dirs={args.l2_pick_check_directions}, tilt={args.l2_pick_check_tilt:.3f}")
     print(f"robot home clearance    = {args.robot_home_clearance:.3f}m")
@@ -3735,11 +3921,13 @@ def main():
         enforce_order_x_constraint=not args.disable_order_x_constraint,
         order_x_tolerance=args.order_x_tolerance,
         enable_y_side_distribution_score=not args.disable_y_side_distribution_score,
-        prefer_upright_when_topdown_low=not args.disable_upright_preference,
+        prefer_upright_when_topdown_low=_use_upright_rule,
         topdown_min_count=args.topdown_min_count,
         check_l2_pick_quick_motion=_use_l2_pick_quick,
         l2_pick_check_parts=_parse_part_order(args.l2_pick_check_parts) or [],
         l3_skip_parts=_parse_part_order(args.l3_skip_parts) or [],
+        l3_linear_free_parts=_parse_part_order(args.l3_linear_free_parts) or [],
+        l3_regrasp_parts=_parse_part_order(args.l3_regrasp_parts) or [],
         l2_pick_check_lift_dist=args.l2_pick_check_lift_dist,
         l2_pick_check_directions=_parse_part_order(args.l2_pick_check_directions) or [],
         l2_pick_check_tilt=args.l2_pick_check_tilt,

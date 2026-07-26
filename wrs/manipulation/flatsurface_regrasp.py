@@ -66,9 +66,12 @@ class FSRegraspPlanner(object):
     def load_from_disk(self, file_name):
         pass
 
-    def create_add_fsregspot(self, spot_pos, spot_rotz, barrier_z_offset=-.01, consider_robot=True, toggle_dbg=False):
-        self._fsregspot_collection.add_new_spot(spot_pos, spot_rotz, barrier_z_offset, consider_robot, toggle_dbg)
+    def create_add_fsregspot(self, spot_pos, spot_rotz, barrier_z_offset=-.01, consider_robot=True, toggle_dbg=False,
+                             extra_obstacle_list=None):
+        self._fsregspot_collection.add_new_spot(spot_pos, spot_rotz, barrier_z_offset, consider_robot, toggle_dbg,
+                                                extra_obstacle_list=extra_obstacle_list)
         self._add_fsregspot_to_graph(self._fsregspot_collection[-1])
+        return self._fsregspot_collection[-1]
 
     def add_start_pose(self, obj_pose, obstacle_list=None, plot_pose_xy=None, toggle_dbg=False):
         start_pg = mp_gp.GPG.create_from_pose(self.robot,
@@ -146,8 +149,8 @@ class FSRegraspPlanner(object):
         spot_x = fsregspot.pos[1]
         spot_y = -fsregspot.pos[0]
         for fspg in fsregspot.fspg_list:
-            plot_pose_x = spot_x + self._plot_p_radius * rm.sin(fspg.fsp_pose_id * self._p_angle_interval)
-            plot_pose_y = spot_y + self._plot_p_radius * rm.cos(fspg.fsp_pose_id * self._p_angle_interval)
+            plot_pose_x = spot_x + self._plot_p_radius * rm.sin(fspg.fs_pose_id * self._p_angle_interval)
+            plot_pose_y = spot_y + self._plot_p_radius * rm.cos(fspg.fs_pose_id * self._p_angle_interval)
             local_nodes = []
             obj_pose = fspg.obj_pose
             for gid, grasp, jnt_values in zip(fspg.feasible_gids, fspg.feasible_grasps, fspg.feasible_confs):
@@ -244,7 +247,9 @@ class FSRegraspPlanner(object):
 
     @ppp.adp.mpi.InterplatedMotion.keep_states_decorator
     def gen_regrasp_motion(self, path, obstacle_list, start_jnt_values=None, linear_distance=.03,
-                           granularity=.03, toggle_start_approach=True, toggle_end_depart=True, toggle_dbg=False):
+                           granularity=.03, toggle_start_approach=True, toggle_end_depart=True, toggle_dbg=False,
+                           goal_approach_direction=None, goal_depart_direction=None,
+                           goal_obstacle_list=None):
         """
         :param path:
         :param obstacle_list:
@@ -254,6 +259,13 @@ class FSRegraspPlanner(object):
         :param rtoggle_start_approach:
         :param toggle_end_depart:
         :param toggle_dbg:
+        :param goal_approach_direction: seating direction for the final transfer edge. ``None`` keeps the
+            generic top-down (-Z) approach; assemblies that mate along another axis must pass it so the
+            motion actually verifies the real insertion direction.
+        :param goal_depart_direction: retract direction after releasing at the goal. ``None`` keeps +Z.
+        :param goal_obstacle_list: obstacles used for the final seating/release segments. Lets the caller
+            exempt the parts the object mates with (which touch it by construction) while still using the
+            full obstacle set for every transit/transfer segment.
         :return:
         """
         regraps_motion = motd.MotionData(robot=self.robot)
@@ -320,14 +332,29 @@ class FSRegraspPlanner(object):
                     # regraps_motion.extend(jv_list=[prev_jnt_values],
                     #                       ev_list=[prev_grasp.ee_values],
                     #                       mesh_list=[self.robot.gen_meshmodel()])
+                    # The carry that ends the path is the one that seats the object into the
+                    # assembly, so it uses the real mating axis and may exempt the parts the
+                    # object lands against. Every earlier carry keeps the generic top-down
+                    # put-down and the full obstacle set.
+                    is_seating = (i == len(path) - 1)
+                    app_dir = -rm.const.z_ax
+                    seg_obstacle_list = obstacle_list
+                    seg_rrt_obstacle_list = None
+                    if is_seating:
+                        if goal_approach_direction is not None:
+                            app_dir = rm.unit_vector(rm.np.asarray(goal_approach_direction, dtype=float))
+                        if goal_obstacle_list is not None:
+                            seg_obstacle_list = goal_obstacle_list
+                            seg_rrt_obstacle_list = obstacle_list
                     prev2current = self.pp_planner.gen_depart_approach_with_given_conf(start_jnt_values=prev_jnt_values,
                                                                                        end_jnt_values=curr_jnt_values,
                                                                                        depart_direction=rm.const.z_ax,
                                                                                        depart_distance=linear_distance,
-                                                                                       approach_direction=-rm.const.z_ax,
+                                                                                       approach_direction=app_dir,
                                                                                        approach_distance=linear_distance,
                                                                                        linear_granularity=granularity,
-                                                                                       obstacle_list=obstacle_list,
+                                                                                       obstacle_list=seg_obstacle_list,
+                                                                                       rrt_obstacle_list=seg_rrt_obstacle_list,
                                                                                        use_rrt=True,
                                                                                        toggle_dbg=False)
                     if prev2current is None:
@@ -347,10 +374,16 @@ class FSRegraspPlanner(object):
                 obj_cmodel_copy.pose = obj_pose
                 retract = self.pp_planner.gen_depart_from_given_conf(start_jnt_values=curr_jnt_values,
                                                                      end_jnt_values=start_jnt_values,
+                                                                     linear_direction=goal_depart_direction,
                                                                      linear_distance=linear_distance,
                                                                      ee_values=self.robot.end_effector.jaw_range[1],
-                                                                     obstacle_list=obstacle_list,
+                                                                     obstacle_list=(obstacle_list
+                                                                                    if goal_obstacle_list is None
+                                                                                    else goal_obstacle_list),
                                                                      object_list=[obj_cmodel_copy],
+                                                                     rrt_obstacle_list=(None
+                                                                                        if goal_obstacle_list is None
+                                                                                        else obstacle_list),
                                                                      use_rrt=True,
                                                                      toggle_dbg=False)
                 if retract is None:
