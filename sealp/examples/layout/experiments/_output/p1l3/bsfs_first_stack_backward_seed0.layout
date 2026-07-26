@@ -1,0 +1,234 @@
+# SEALP Workspace Layout v1.0
+# Converted from bsfs_first_stack_backward_seed0.json
+
+format_version: '1.0'
+name: bsfs_first_stack_backward_seed0
+robot_base:
+  pos:
+  - 0.0
+  - 0.0
+  - 0.0
+  rotmat:
+  - - 1.0
+    - 0.0
+    - 0.0
+  - - 0.0
+    - 1.0
+    - 0.0
+  - - 0.0
+    - 0.0
+    - 1.0
+assembly_station:
+  pos:
+  - 0.296833333085
+  - -1.38777878078e-17
+  - 0.0
+  rotmat:
+  - - 1.0
+    - 0.0
+    - 0.0
+  - - 0.0
+    - 1.0
+    - 0.0
+  - - 0.0
+    - 0.0
+    - 1.0
+staging:
+  part_10:
+    pos:
+    - 0.296833333085
+    - -1.38777878078e-17
+    - 0.0
+    rotmat:
+    - - 1.0
+      - 0.0
+      - 0.0
+    - - 0.0
+      - 1.0
+      - 0.0
+    - - 0.0
+      - 0.0
+      - 1.0
+  part_8:
+    pos:
+    - 0.325999999925
+    - -0.123000000201
+    - 0.01
+    rotmat:
+    - - 0.766044443119
+      - 0.642787609687
+      - 0.0
+    - - -0.642787609687
+      - 0.766044443119
+      - 0.0
+    - - 0.0
+      - 0.0
+      - 1.0
+  part_6:
+    pos:
+    - 0.2335
+    - -0.122999999642
+    - 0.01
+    rotmat:
+    - - 0.939692620786
+      - 0.342020143326
+      - 0.0
+    - - -0.342020143326
+      - 0.939692620786
+      - 0.0
+    - - 0.0
+      - 0.0
+      - 1.0
+  part_4:
+    pos:
+    - 0.2335
+    - 0.122999999642
+    - 0.01
+    rotmat:
+    - - 1.0
+      - 0.0
+      - 0.0
+    - - 0.0
+      - 1.0
+      - 0.0
+    - - 0.0
+      - 0.0
+      - 1.0
+metadata:
+  method: BSFS-beam
+  asmdef: sealp/assembly_sequence/_demo_output/first_stack.asmdef
+  part_order:
+  - part_10
+  - part_8
+  - part_6
+  - part_4
+  preassemble_first_part: true
+  preassembled_part: part_10
+  arm_choice:
+    part_10: preassembled
+    part_8: lft
+    part_6: lft
+    part_4: lft
+  pose_tag:
+    part_10: preassembled_at_assembly_region
+    part_8: fs_yaw
+    part_6: fs_yaw
+    part_4: fs_yaw
+  rot_name:
+    part_8: identity_y320
+    part_6: rot90_03_y160
+    part_4: identity_y000
+  layout_score: 0.365890231358
+  total_cost: 1.6206273294
+  l2_pass: true
+  l3_pass: false
+  layout_fingerprint: C0.2968,-0.0000|part_8:0.3260,-0.1230:identity_y320|part_6:0.2335,-0.1230:rot90_03_y160|part_4:0.2335,0.1230:identity_y000|beam|0.08|6|1|4|0.1|0.005|0.001|False|False|part_10,part_8,part_6,part_4
+  grasp_witness:
+    part_4:
+      certification_level: L2
+      arm: lft
+      gids:
+      - 1
+      - 22
+      - 5
+      - 0
+      preferred_gid: 1
+      rot_name: identity_y000
+      staging_pos:
+      - 0.2335
+      - 0.122999999642
+      - 0.01
+      staging_rotmat:
+      - - 1.0
+        - 0.0
+        - 0.0
+      - - 0.0
+        - 1.0
+        - 0.0
+      - - 0.0
+        - 0.0
+        - 1.0
+      source: bsfs_first_stack_backward_seed0.json
+    part_8:
+      certification_level: L2
+      arm: lft
+      gids:
+      - 68
+      - 41
+      - 11
+      - 10
+      preferred_gid: 68
+      rot_name: identity_y320
+      staging_pos:
+      - 0.325999999925
+      - -0.123000000201
+      - 0.01
+      staging_rotmat:
+      - - 0.766044443119
+        - 0.642787609687
+        - 0.0
+      - - -0.642787609687
+        - 0.766044443119
+        - 0.0
+      - - 0.0
+        - 0.0
+        - 1.0
+      source: bsfs_first_stack_backward_seed0.json
+  per_step_certification:
+    part_4:
+      pid: part_4
+      xy:
+      - 0.2335
+      - 0.122999999642
+      rot_name: identity_y000
+      pose_tag: fs_yaw
+      arm: lft
+      gids:
+      - 1
+      - 22
+      - 5
+      - 0
+      footprint:
+      - 0.0400000028312
+      - 0.0400000028312
+      common_grasp_count: 4
+      manipulability: 0.0180964809642
+      clearance: 0.138347789978
+      dist_to_goal: 0.138347789978
+      cost: 0.54725796375
+      cost_lb: 0.159812737264
+      certified: true
+      yaw_deg: 0.0
+    part_6:
+      pid: part_6
+      certified: false
+      reason: below_threshold
+      rot_name: rot90_03_y160
+      yaw_deg: 160.0
+      xy:
+      - 0.2335
+      - -0.122999999642
+    part_8:
+      pid: part_8
+      xy:
+      - 0.325999999925
+      - -0.123000000201
+      rot_name: identity_y320
+      pose_tag: fs_yaw
+      arm: lft
+      gids:
+      - 68
+      - 41
+      - 11
+      - 10
+      footprint:
+      - 0.0986182441163
+      - 0.0986182441163
+      common_grasp_count: 4
+      manipulability: 0.0204426503373
+      clearance: 0.0924999999255
+      dist_to_goal: 0.126410816405
+      cost: 0.54274550041
+      cost_lb: 0.127983180551
+      certified: true
+      yaw_deg: 320.0

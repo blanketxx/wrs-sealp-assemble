@@ -147,8 +147,8 @@ DEFAULT_ASSEMBLY_ARM_Y_CLEARANCE = 0.22
 # 判断方式是“零件 footprint AABB 与 arm keepout rectangle 是否重叠”。
 # 这样避免“先乱采样，再被 robot_home_collision 大量杀掉”，提高有效采样率。
 DEFAULT_FILTER_STAGING_NEAR_ARMS = True
-DEFAULT_STAGING_ARM_X_CLEARANCE = 0.12
-DEFAULT_STAGING_ARM_Y_CLEARANCE = 0.12
+DEFAULT_STAGING_ARM_X_CLEARANCE = 0.05
+DEFAULT_STAGING_ARM_Y_CLEARANCE = 0.05
 
 # 根据最终装配位置的 y 左/右关系，对 staging 初始位置做半桌面优先采样。
 # y 更大 = 更偏左 -> 优先采样桌子左半边；

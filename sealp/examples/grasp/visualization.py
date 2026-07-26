@@ -104,8 +104,8 @@ def main():
     # ------------------------------------------------------------------
     # 2. Load grasps (plan first if not cached)
     # ------------------------------------------------------------------
-    out_dir = os.path.join(os.path.dirname(__file__), "totem_grasp")
-    pickle_path = os.path.join(out_dir, "tower_top_cross_grasps.pickle")
+    out_dir = os.path.join(os.path.dirname(__file__), "first_stack_grasp")
+    pickle_path = os.path.join(out_dir, "part_4_grasps.pickle")
 
     if os.path.isfile(pickle_path):
         print(f"Loading grasps from {pickle_path}...")
@@ -143,12 +143,12 @@ def main():
     # 5. Visualize
     # ------------------------------------------------------------------
     # Show the demo object
-    obj_cmodel = mcm.CollisionModel(r"D:\Project\wrs-sealp\sealp\assets\models\Totem\model\top_cross.stl")
+    obj_cmodel = mcm.CollisionModel(r"D:\Project\wrs-sealp\sealp\assets\models\first\part_4.stl")
     obj_cmodel.rgba = np.array([0.4, 0.4, 0.4, 1.0])
     obj_cmodel.attach_to(base)
 
     # Show grasps (limited for performance)
-    max_show = min(30, len(grasp_collection))
+    max_show = min(100, len(grasp_collection))
     print(f"\n  Showing {max_show} grasps...")
 
     for i, grasp in enumerate(grasp_collection):

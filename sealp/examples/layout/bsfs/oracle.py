@@ -29,7 +29,7 @@ from .cost import CostParams, step_cost, step_lb, passes_thresholds
 # deterministic (cacheable / hard-prunable) failure reasons
 HARD_FAIL = frozenset({
     "arm_keepout", "upright_constraint", "pair_collision", "mesh_clearance",
-    "home_collision", "home_clearance", "no_common_gids", "no_common_gids_executor", "no_grasp_collection",
+    "home_collision", "home_clearance", "no_common_gids", "no_grasp_collection",
 })
 UNPROVEN = "unproven"    # L3 RRT timeout etc. -- never hard-prune (A7)
 
@@ -87,8 +87,7 @@ class StepOracle:
 
     # ---- the oracle ----------------------------------------------
     def certify(self, pid: str, xy: np.ndarray, cand, placed: set,
-                staged_pids: List[str], level: int = 2,
-                executor_confirm: bool = False
+                staged_pids: List[str], level: int = 2
                 ) -> Tuple[Optional[Dict], str]:
         """Certify assembly step for ``pid`` at fidelity ``level`` (1, 2, or 3).
 
@@ -131,9 +130,6 @@ class StepOracle:
             arm = get_layout_arm(s.robot, arm_tag, single_arm=s.single_arm_mode)
             planner = PickPlacePlanner(robot=arm)
             try:
-                # Canonical warm-start: do not let a previous certification leave the arm on a
-                # different IK branch. evaluate_layout already does this; the BSFS oracle must too.
-                arm.goto_given_conf(np.zeros_like(np.asarray(arm.get_jnt_values(), dtype=float)))
                 gids = planner.reason_common_gids(
                     grasp_collection=gc,
                     goal_pose_list=[(sp, sr), (gp, gr)],
@@ -166,50 +162,13 @@ class StepOracle:
         best_gc = len(gids_dep)
         sel_gids = list(gids_dep)
 
-        # ---- Optional L2-final executor endpoint confirmation -------
-        # During the backward search we deliberately keep the broad/cheap ``staging_aware``
-        # semantics for recall. Only the FINAL per-step witness is rechecked with the executor's
-        # stricter endpoint obstacle semantics (notably the work table). This keeps BSFS lazy.
-        exec_obs = planner_obs
-        witness_source = "l2_search"
-        if executor_confirm:
-            exec_obs = s._planner_obstacles(
-                obs, current_pid=pid, placed=placed, mode_override="executor_match")
-            planner = PickPlacePlanner(robot=arm)
-            try:
-                arm.goto_given_conf(np.zeros_like(np.asarray(arm.get_jnt_values(), dtype=float)))
-            except Exception:
-                pass
-            gids_exec, witness_source = s._reason_common_gids_preferred(
-                planner=planner,
-                gc=gc,
-                goal_pose_list=[(sp, sr), (gp, gr)],
-                obstacle_list=exec_obs,
-                preferred_gids=list(sel_gids),
-                fallback_full=True,
-            )
-            if not gids_exec:
-                return None, "no_common_gids_executor"
-
-            if witness_source == "full_fallback" and set(gids_exec) != set(sel_gids):
-                try:
-                    gids_dep2, _ = s._l2_pick_depart_motion_gids(
-                        arm=arm, gc=gc, sp=sp, sr=sr, gids=list(gids_exec))
-                except Exception:
-                    gids_dep2 = list(gids_exec)
-                if not gids_dep2:
-                    return None, "l2_pick_depart_motion"
-                gids_exec = list(gids_dep2)
-            sel_gids = list(gids_exec)
-            best_gc = len(sel_gids)
-
         # ---- L2 quick pick motion --------------------------------
         if level >= 2:
             planner = PickPlacePlanner(robot=arm)
             try:
                 gids2, _ = s._l2_pick_quick_check_gids(
                     pid=pid, planner=planner, gc=gc, gids=list(sel_gids),
-                    sp=sp, sr=sr, obs=exec_obs)
+                    sp=sp, sr=sr, obs=obs)
             except Exception:
                 gids2 = sel_gids
             if not gids2:
@@ -232,8 +191,6 @@ class StepOracle:
             "pose_tag": str(getattr(cand, "tag", "unknown")),
             "arm": str(best_arm),
             "gids": [int(g) for g in sel_gids],
-            "preferred_gid": int(sel_gids[0]) if sel_gids else None,
-            "witness_source": str(witness_source),
             "footprint": np.asarray(getattr(cand, "footprint", [0.05, 0.05]),
                                     dtype=float)[:2],
             "common_grasp_count": int(best_gc),

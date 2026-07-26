@@ -23,7 +23,7 @@ class PantheraGripper(gpi.GripperInterface):
                  rotmat=np.eye(3),
                  cdmesh_type=mcm.const.CDMeshType.DEFAULT,
                  name="panthera_gripper",
-                 jaw_range=np.array([0.0, 0.08]),
+                 jaw_range=np.array([0.0, 0.085]),
                  close_bias=0.0,
                  use_palm_mesh=True,
                  palm_mesh_name=None,
