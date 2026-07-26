@@ -39,7 +39,8 @@
 8. 全部步骤成功后保存运动路径 pkl，下次可直接缓存回放：
    - 默认缓存路径：sealp/examples/motion/_output/{layout名}_motions.pkl
    - 强制重算：--replan
-   - 直接读缓存(不重规划)：不加 --replan，参数需与保存时一致(尤其 --cdprim-type)
+   - 直接读缓存(不重规划)：不加 --replan；即使 fingerprint 变了也会回放已有 pkl
+   - 若需旧行为(fingerprint 不匹配就拒绝缓存)：加 --strict-cache
 
 推荐放置路径：
     sealp/examples/motion/execute_layout_sequence_visual.py
@@ -2686,6 +2687,8 @@ def _motion_cache_fingerprint(
     handover_dir: str,
     grasp_map: Optional[Dict[str, str]] = None,
     contact_exclusion_map: Optional[Dict[str, List[str]]] = None,
+    *,
+    single_arm_mode: bool = False,
 ) -> str:
     """用关键输入生成缓存指纹，避免 layout/asmdef 改了还误用旧路径。"""
     meta = {
@@ -2698,6 +2701,7 @@ def _motion_cache_fingerprint(
         "handover_dir": os.path.abspath(handover_dir),
         "grasp_map": grasp_map or {},
         "contact_exclusion_map": contact_exclusion_map or {},
+        "single_arm_mode": bool(single_arm_mode),
         "pick_depart_dist": float(PICK_DEPART_DIST),
         "place_depart_dist": float(PLACE_DEPART_DIST),
         "skip_place_depart_last": True,
@@ -2869,7 +2873,19 @@ def save_motion_cache(
     return cache_path
 
 
-def load_motion_cache(cache_path: str, expected_fingerprint: str) -> Optional[dict]:
+def load_motion_cache(
+    cache_path: str,
+    expected_fingerprint: str,
+    *,
+    strict: bool = False,
+) -> Optional[dict]:
+    """Load motion pkl for playback.
+
+    By default (``strict=False``) any readable non-empty cache is accepted even
+    when fingerprint/format_version differ — only ``--replan`` forces a full
+    re-search. Pass ``strict=True`` (CLI: ``--strict-cache``) to reject stale
+    caches like the old behaviour.
+    """
     if not cache_path or not os.path.isfile(cache_path):
         return None
 
@@ -2880,15 +2896,35 @@ def load_motion_cache(cache_path: str, expected_fingerprint: str) -> Optional[di
         print(f"[CACHE/LOAD] 读取缓存失败，忽略: {type(e).__name__}: {e}")
         return None
 
-    if payload.get("format_version") != MOTION_CACHE_FORMAT_VERSION:
-        print(f"[CACHE/LOAD] 缓存版本不匹配，忽略: {cache_path}")
-        return None
-    if payload.get("fingerprint") != expected_fingerprint:
-        print(f"[CACHE/LOAD] 缓存 fingerprint 不匹配，忽略: {cache_path}")
-        return None
     if not payload.get("steps"):
         print(f"[CACHE/LOAD] 缓存为空，忽略: {cache_path}")
         return None
+
+    cached_fp = payload.get("fingerprint")
+    cached_ver = payload.get("format_version")
+    fp_ok = cached_fp == expected_fingerprint
+    ver_ok = cached_ver == MOTION_CACHE_FORMAT_VERSION
+
+    if not ver_ok:
+        msg = (
+            f"[CACHE/LOAD] 缓存 format_version 不匹配: cached={cached_ver!r} "
+            f"expected={MOTION_CACHE_FORMAT_VERSION!r}"
+        )
+        if strict:
+            print(msg + "，忽略")
+            return None
+        print(msg + "；仍尝试回放")
+
+    if not fp_ok:
+        msg = (
+            f"[CACHE/LOAD] 缓存 fingerprint 不匹配: {cache_path}\n"
+            f"  expected={expected_fingerprint}\n"
+            f"  cached  ={cached_fp}"
+        )
+        if strict:
+            print(msg + "\n  -> 忽略( strict-cache )")
+            return None
+        print(msg + "\n  -> 仍使用该 pkl 回放；若要重算请加 --replan")
 
     print(f"[CACHE/LOAD] 命中缓存 -> {cache_path}  steps={len(payload['steps'])}")
     return payload
@@ -3154,6 +3190,12 @@ def _parse_args():
         help="忽略已有缓存，重新规划全部步骤",
     )
     parser.add_argument(
+        "--strict-cache",
+        action="store_true",
+        help="fingerprint/format_version 不匹配时拒绝使用已有 pkl(旧默认行为)。"
+             "默认只要 pkl 存在且可读就直接回放，只有 --replan 才重算。",
+    )
+    parser.add_argument(
         "--no-save-cache",
         action="store_true",
         help="即使全部成功也不写入缓存",
@@ -3298,14 +3340,25 @@ def main():
         handover_dir=os.path.abspath(args.handover_dir),
         grasp_map=grasp_map,
         contact_exclusion_map=contact_exclusion_map,
+        single_arm_mode=single_arm_mode,
     )
     print(f"motion_cache = {cache_path}")
     print(f"cache_fp     = {fingerprint}")
+    if args.replan:
+        print("[CACHE] --replan: 强制重新规划，忽略已有 pkl")
+    elif os.path.isfile(cache_path):
+        print("[CACHE] 未指定 --replan: 优先使用已有 pkl( fingerprint 不匹配也会回放 )")
+    else:
+        print("[CACHE] pkl 不存在，将执行规划")
 
     summary: ExecutionSummary
     loaded_from_cache = False
     if not args.replan:
-        cached = load_motion_cache(cache_path, fingerprint)
+        cached = load_motion_cache(
+            cache_path,
+            fingerprint,
+            strict=bool(getattr(args, "strict_cache", False)),
+        )
         if cached is not None:
             summary = rebuild_summary_from_cache(cached, runner)
             setup_scene_for_cached_playback(runner)
@@ -3313,6 +3366,8 @@ def main():
             print("[CACHE/LOAD] 跳过规划，直接使用缓存关节路径重建动画。")
 
     if not loaded_from_cache:
+        if not args.replan and os.path.isfile(cache_path):
+            print("[CACHE] 无法加载已有 pkl，回退到重新规划")
         summary = runner.execute_until_failure()
         if (
             not args.no_save_cache
