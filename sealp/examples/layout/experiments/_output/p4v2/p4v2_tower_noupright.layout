@@ -60,9 +60,9 @@ staging:
       - !!float '0'
     - - !!float '0'
       - !!float '0'
-      - !!float '1'
-    - - !!float '0'
       - !!float '-1'
+    - - !!float '0'
+      - !!float '1'
       - !!float '0'
   post_fl:
     pos:

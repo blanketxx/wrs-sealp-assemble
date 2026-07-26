@@ -9,8 +9,12 @@ This script plans antipodal grasps for the leg (and optionally the seat) on the
 current STL files and writes them into ``sealp/examples/grasp/yuanchair_grasp/``
 with the exact names the layout searcher looks up:
 
-    leg_model  -> leg_model_grasps.pickle   (model id ``leg_model`` in asmdef)
-    seat       -> seat_grasps.pickle        (part id ``seat``; preassembled)
+    leg_model       -> leg_model_grasps.pickle   (model id in asmdef)
+    yuanchair-part2 -> yuanchair-part2_grasps.pickle  (mesh basename fallback)
+    seat            -> seat_grasps.pickle        (part id ``seat``; preassembled)
+
+Both leg filenames get the SAME collection so lookups by model id or mesh
+basename never silently fall back to the stale 33 cm pickle.
 
 Run::
 
@@ -22,12 +26,14 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 
 import numpy as np
 
 import wrs.basis.robot_math as rm
 import wrs.modeling.collision_model as mcm
 import wrs.grasping.planning.antipodal as gpa
+from wrs.grasping.grasp import GraspCollection
 from wrs.robot_sim.end_effectors.grippers.panthera_gripper.panthera_gripper import (
     PantheraGripper,
 )
@@ -86,25 +92,46 @@ def main() -> None:
     os.makedirs(_OUT_DIR, exist_ok=True)
     print("========== YuanChair grasp regeneration (PantheraGripper) ==========")
 
+    def _save_aliases(gc: GraspCollection, out_dir: str, names: tuple[str, ...],
+                      tag: str) -> None:
+        primary = os.path.join(out_dir, names[0])
+        gc.save_to_disk(file_name=primary)
+        print(f"[{tag}] {len(gc)} grasps (topdown(-Z)={_topdown_count(gc)}) "
+              f"-> {os.path.relpath(primary, _HERE)}")
+        for name in names[1:]:
+            alias = os.path.join(out_dir, name)
+            shutil.copyfile(primary, alias)
+            print(f"[{tag}] alias -> {os.path.relpath(alias, _HERE)}")
+
+    def _lean_subsample(gc: GraspCollection, n: int = 400) -> GraspCollection:
+        grasps = list(gc)[:min(int(n), len(gc))]
+        return GraspCollection(end_effector=getattr(gc, "end_effector", None),
+                               grasp_list=grasps)
+
     print(f"[leg ] planning on {os.path.relpath(LEG_STL, _HERE)}")
     leg_gc = _plan(LEG_STL, max_samples=args.max_samples, rot_deg=args.rot_deg,
                    min_dist=args.min_dist, contact_offset=args.contact_offset)
-    leg_out = os.path.join(_OUT_DIR, "leg_model_grasps.pickle")
-    leg_gc.save_to_disk(file_name=leg_out)
-    print(f"[leg ] {len(leg_gc)} grasps (topdown(-Z)={_topdown_count(leg_gc)}) "
-          f"-> {os.path.relpath(leg_out, _HERE)}")
+    # Write under BOTH lookup names used by _find_grasp_pickle (model id + mesh base).
+    _save_aliases(leg_gc, _OUT_DIR,
+                  ("leg_model_grasps.pickle", "yuanchair-part2_grasps.pickle"), "leg ")
+
+    # Keep the lean search set in sync (first N grasps; search-only subsample).
+    lean_dir = os.path.join(_HERE, "yuanchair_grasp_lean")
+    os.makedirs(lean_dir, exist_ok=True)
+    lean_gc = _lean_subsample(leg_gc, 400)
+    _save_aliases(lean_gc, lean_dir,
+                  ("leg_model_grasps.pickle", "yuanchair-part2_grasps.pickle"), "lean")
 
     if args.seat:
         print(f"[seat] planning on {os.path.relpath(SEAT_STL, _HERE)}")
         seat_gc = _plan(SEAT_STL, max_samples=args.max_samples, rot_deg=args.rot_deg,
                         min_dist=args.min_dist, contact_offset=args.contact_offset)
-        seat_out = os.path.join(_OUT_DIR, "seat_grasps.pickle")
-        seat_gc.save_to_disk(file_name=seat_out)
-        print(f"[seat] {len(seat_gc)} grasps (topdown(-Z)={_topdown_count(seat_gc)}) "
-              f"-> {os.path.relpath(seat_out, _HERE)}")
+        _save_aliases(seat_gc, _OUT_DIR, ("seat_grasps.pickle",), "seat")
+        seat_lean = _lean_subsample(seat_gc, 400)
+        _save_aliases(seat_lean, lean_dir, ("seat_grasps.pickle",), "lean")
 
     print("Done. NOTE: seat is preassembled (not picked), so leg grasps are what "
-          "the GA/L2 actually rely on.")
+          "the GA/L2 actually rely on. Current leg height is 0.16 m (was 0.33 m).")
 
 
 if __name__ == "__main__":
