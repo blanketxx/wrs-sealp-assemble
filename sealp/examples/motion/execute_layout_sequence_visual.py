@@ -21,17 +21,17 @@
    - 会继续尝试后续零件；
    - 最后播放所有成功规划出来的步骤动画；
    - 同时显示初始布局、目标 ghost、已成功装配的零件。
-4. middle_plate 走 **单臂**：先试强制 Cartesian 直线 approach/depart 的 pick-place，
-   全部失败后改用 ``DirectTransportPrimitive``（同一只手臂、同一个 grasp，取放段用 RRT
-   连接，不生成强制直线段，不换手、不中途放下）。双臂换手默认关闭，仅
-   ``--middle-plate-handover`` 时才启用，届时需要预生成
-   ``tower_handover/middle_plate_hopg.pickle``。
+4. 每个零件都是 **单臂**：先试强制 Cartesian 直线 approach/depart 的 pick-place，全部失败后
+   兜底改用 ``DirectTransportPrimitive``（同一只手臂、同一个 grasp，取放段用 RRT 连接，不生成
+   强制直线段，不换手、不中途放下）。双臂换手默认关闭，仅 ``--middle-plate-handover`` 时才
+   启用，届时需要预生成 ``tower_handover/middle_plate_hopg.pickle``。
 5. 默认使用 **box（AABB 包围盒）** 做避障碰撞，比 mesh/triangles 更快、更保守。
    - 需要更精细碰撞可传 ``--cdprim-type triangles``。
-6. 运输障碍与落位接触豁免分离：
-   - middle_plate 运输/落位：四根 post 始终在 transit 障碍中；DirectTransportPrimitive 落位段对
-     被抓 plate + post 使用 triangle mesh 检测，避免 box 把带孔板当成实心板而穿模。
-   - 最终落位/插接附近仍保留必要的接触豁免。
+6. 接触零件自动判定，不写死零件名：``auto_detect_mating_parts`` 用 asmdef parent + 最终 goal
+   位姿下的真实表面距离，得到"当前零件按设计就要贴合"的已装零件。
+   - 这些零件的 box 只在落位校验里让开（否则 goal 抓取 IK 全灭），运输段仍是完整障碍；
+   - DirectTransportPrimitive 的落位段改用它们的 triangle mesh 继续检测，避免 box 把带孔板
+     当成实心板，也避免"允许接触"退化成"整段忽略"而穿模。
 7. 动画效果仿照 LRMate200id_ppp_animation.py：
    - 初始零件留在 layout 位置；
    - 抓住后由夹爪动画接管；
@@ -118,6 +118,7 @@ from sealp.layout.layout_robot_factory import (
 )
 from sealp.primitives.transport import TransportPrimitive
 from sealp.primitives.direct_transport import DirectTransportPrimitive
+from sealp.assembly_sequence.mating_detection import MatingCache
 from sealp.primitives.seating_collision import direct_transport_seating_kwargs
 from wrs.grasping.grasp import GraspCollection
 
@@ -1353,14 +1354,12 @@ def _linear_free_kwargs(pid: str, arm_tag: str) -> Dict:
 def _plan_candidates(pid: str, arm_tag: str, *, skip_place_depart: bool = False):
     """本步要依次尝试的规划方案。
 
-    先把所有强制 Cartesian 直线段的方向候选试完 —— 它约束更强, 能过就用它。全部失败后,
-    对 ``NOLINEAR_PART_IDS`` 里的零件再试一次无强制直线段的单臂规划(仍是同一只手臂、
-    同一个 grasp, 不换手也不中途放下)。
+    先把所有强制 Cartesian 直线段的方向候选试完 —— 它约束更强, 能过就用它。全部失败后
+    再试一次无强制直线段的单臂规划(仍是同一只手臂、同一个 grasp, 不换手也不中途放下)。
+    这个兜底对所有零件都挂上: 它只在前面全挂之后才会跑, 换装配体时不需要再维护名单。
     """
     out = _motion_candidate_kwargs(pid, arm_tag, skip_place_depart=skip_place_depart)
-    if pid in NOLINEAR_PART_IDS:
-        out = list(out) + [(LINEAR_FREE_TAG, {})]
-    return out
+    return list(out) + [(LINEAR_FREE_TAG, {})]
 
 
 def _last_assembly_part_id(part_order: List[str], layout: WorkspaceLayout) -> Optional[str]:
@@ -1438,31 +1437,6 @@ def _step_for_part(asm: AssemblyDef, part_id: str):
         if s.part_id == part_id:
             return s
     return None
-
-
-def _default_contact_exclusion_map(asm: AssemblyDef) -> Dict[str, List[str]]:
-    """默认接触/插接豁免表。
-
-    通用规则：
-        当前零件的 direct parent 会自动在 _contact_exclusion_set 中加入；
-        这里主要放一些 asmdef parent 无法表达但几何上明显插接/承托的关系。
-
-    对当前 tower：
-        - top_cross 竖着插入 middle_plate 顶面方孔 -> 规划 top_cross 时 placement 排除 middle_plate；
-        - middle_plate 落在四根 post 顶上 -> placement 排除四根 post（goal 抓取 IK）；
-          运输与 DirectTransport 落位仍保留 post 在 transit 中，并用 triangle mesh 防穿模。
-    """
-    part_ids = set(getattr(asm, "part_ids", []))
-    out: Dict[str, List[str]] = {}
-
-    if "top_cross" in part_ids and "middle_plate" in part_ids:
-        out.setdefault("top_cross", []).append("middle_plate")
-
-    post_ids = [p for p in ("post_bl", "post_fl", "post_br", "post_fr") if p in part_ids]
-    if "middle_plate" in part_ids and post_ids:
-        out.setdefault("middle_plate", []).extend(post_ids)
-
-    return out
 
 
 def _part_order_from_asm_or_layout(asm: AssemblyDef, layout: WorkspaceLayout) -> List[str]:
@@ -1863,15 +1837,12 @@ class LayoutSequenceVisualizer:
             handover_dir or DEFAULT_HANDOVER_DIR, "middle_plate_hopg.pickle"
         )
 
-        # 接触/插接豁免表：每个 step 规划时，从动态障碍物中临时排除这些已装件。
-        # direct parent 会自动加入；这里叠加默认 tower 规则和用户传入规则。
-        self.contact_exclusion_map = _default_contact_exclusion_map(self.asm)
-        if contact_exclusion_map:
-            for k, v in contact_exclusion_map.items():
-                self.contact_exclusion_map.setdefault(k, [])
-                for item in v:
-                    if item not in self.contact_exclusion_map[k]:
-                        self.contact_exclusion_map[k].append(item)
+        # 接触/插接豁免：默认由 auto_detect_mating_parts 从 asmdef parent + 最终 goal 位姿的
+        # 真实几何距离自动得到（见 _contact_exclusion_set），不再按零件名硬编码。
+        # 这里只保留用户显式传入的额外豁免，作为自动检测的补充。
+        self.contact_exclusion_map: Dict[str, List[str]] = {
+            k: list(v) for k, v in (contact_exclusion_map or {}).items()
+        }
 
         self.part_order = _part_order_from_asm_or_layout(self.asm, self.layout)
         self._last_assembly_pid = _last_assembly_part_id(self.part_order, self.layout)
@@ -1946,36 +1917,41 @@ class LayoutSequenceVisualizer:
         print(f"staging_models = {list(self.staging_models.keys())}")
         print(f"goal_models    = {list(self.goal_models.keys())}")
 
-    def _contact_exclusion_set(self, current_pid: str, placed: set) -> set:
-        """当前 step 的接触/插接豁免集合。
+        self._mating_cache = MatingCache(
+            goal_model_of=self.goal_models.get,
+            parent_of=self._parent_of,
+            verbose=True,
+        )
 
-        这些零件不会加入 obstacle_list：
-        1. 当前零件的 direct parent；
-        2. contact_exclusion_map 中声明的接触件。
+    def _parent_of(self, pid: str) -> Optional[str]:
+        step = _step_for_part(self.asm, pid)
+        return getattr(step, "parent_id", None) if step is not None else None
 
-        典型例子：
-            post_bl 插入 base_plate 的孔时，base_plate 是父件，不能作为普通障碍；
-            top_cross 插入 middle_plate 的方孔时，middle_plate 也应临时排除。
+    def mating_parts(self, current_pid: str, placed: set) -> set:
+        """当前零件在最终装配状态下真正接触到的已装零件。
+
+        判据只有两条，与具体装配体无关：asmdef 里声明的 parent，以及把当前零件放到它的
+        最终 goal pose 后与各已装零件的真实表面距离。换成新的塔/椅子/桌子不需要改代码。
         """
-        excl = set()
+        return self._mating_cache.get(current_pid, placed)
 
-        step = _step_for_part(self.asm, current_pid)
-        parent_id = getattr(step, "parent_id", None) if step is not None else None
-        if parent_id and parent_id != "fixture":
-            excl.add(parent_id)
+    def _contact_exclusion_set(self, current_pid: str, placed: set) -> set:
+        """落位校验时从 obstacle_list 里临时移除的已装件。
 
+        这些零件按设计就要和当前零件贴合，它们的 box cdprim 会让 goal 抓取 IK 全部失败。
+        移除的只是 box：DirectTransportPrimitive 在落位段用它们的 triangle mesh 继续检测，
+        所以"允许最终接触"不会退化成"整段忽略"。
+        """
+        excl = set(self.mating_parts(current_pid, placed))
         for p in self.contact_exclusion_map.get(current_pid, []):
             excl.add(p)
-
         # 只排除已经装好的接触件；还没装的零件仍然应该作为 staging 障碍。
         return {p for p in excl if p in placed}
 
     def _transit_obstacles(self, current_pid: str, placed: set) -> List:
         """运输/RRT 阶段使用的完整动态障碍，不做接触豁免。
 
-        关键修复：
-            middle_plate 在移动过程中必须把四根 post 当作真实障碍物，
-            否则虽然最终落位需要接触豁免，但运输路径可能直接穿过柱子。
+        最终落位允许接触的零件，在运输途中仍然是普通障碍物，否则路径会直接穿过它们。
         """
         obs = list(self.env_obstacles)
 
@@ -2407,7 +2383,8 @@ class LayoutSequenceVisualizer:
                             goal_pose_list=[(np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))],
                             obstacle_list=transit_obs,
                             grasp_obstacle_list=placement_obs,
-                            **direct_transport_seating_kwargs(pid, self.asm.part_ids, transit_obs),
+                            **direct_transport_seating_kwargs(
+                                self.mating_parts(pid, placed), transit_obs),
                             **_linear_free_kwargs(pid, arm_tag),
                         )
                     else:

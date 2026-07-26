@@ -82,6 +82,7 @@ from sealp.layout.layout_robot_factory import (
 from wrs.grasping.grasp import GraspCollection
 
 from sealp.assembly_sequence import AssemblyDef
+from sealp.assembly_sequence.mating_detection import MatingCache
 from sealp.config import load_config
 from sealp.colliders import StaticEnvironment
 from sealp.layout import WorkspaceLayout
@@ -2011,28 +2012,6 @@ class WeightedInitialLayoutSearcher:
     # 接触/插接豁免 (与 execute_layout_sequence_visual 口径一致)
     # --------------------------------------------------------
 
-    def _contact_exclusion_map(self) -> Dict[str, List[str]]:
-        """默认接触/插接豁免表 (惰性构建, 缓存到 self).
-
-        与执行脚本 _default_contact_exclusion_map 保持一致:
-            - top_cross 插入 middle_plate 顶面方孔 -> placement 排除 middle_plate;
-            - middle_plate 落在四根 post 顶上 -> placement 排除四根 post;
-              transit/落位 mesh 检测见 DirectTransportPrimitive。
-        另外每个零件 asmdef 里的 direct parent 也会在 _contact_exclusion_set 里自动排除。
-        """
-        cached = getattr(self, "_contact_excl_map_cache", None)
-        if cached is not None:
-            return cached
-        part_ids = set(self.part_order)
-        out: Dict[str, List[str]] = {}
-        if "top_cross" in part_ids and "middle_plate" in part_ids:
-            out.setdefault("top_cross", []).append("middle_plate")
-        post_ids = [p for p in ("post_bl", "post_fl", "post_br", "post_fr") if p in part_ids]
-        if "middle_plate" in part_ids and post_ids:
-            out.setdefault("middle_plate", []).extend(post_ids)
-        self._contact_excl_map_cache = out
-        return out
-
     def _part_parent_map(self) -> Dict[str, str]:
         cached = getattr(self, "_part_parent_cache", None)
         if cached is not None:
@@ -2049,18 +2028,20 @@ class WeightedInitialLayoutSearcher:
     def _contact_exclusion_set(self, current_pid: Optional[str], placed: set) -> set:
         """规划 current_pid 时应临时排除的"已装接触件"集合。
 
-        = direct parent (非 fixture) ∪ 接触表声明 , 再 ∩ 已装件。
+        接触件由 asmdef 的 direct parent + 最终 goal 位姿下的真实表面距离自动判定, 再 ∩ 已装件。
         只有"已经装好"的接触件才豁免; 还没装的零件仍应作为 staging 障碍。
         """
         if not current_pid:
             return set()
-        excl = set()
-        parent = self._part_parent_map().get(current_pid)
-        if parent and parent != "fixture":
-            excl.add(parent)
-        for p in self._contact_exclusion_map().get(current_pid, []):
-            excl.add(p)
-        return {p for p in excl if p in (placed or set())}
+        placed = placed or set()
+        cache = getattr(self, "_mating_cache", None)
+        if cache is None or getattr(self, "_mating_cache_key", None) != id(self.goal_models):
+            cache = MatingCache(goal_model_of=self.goal_models.get,
+                                parent_of=self._part_parent_map().get,
+                                verbose=bool(getattr(self, "verbose", False)))
+            self._mating_cache = cache
+            self._mating_cache_key = id(self.goal_models)
+        return {p for p in cache.get(current_pid, placed) if p in placed}
 
     def _planner_obstacles(self, obs: List, current_pid: Optional[str] = None,
                            placed: Optional[set] = None) -> List:

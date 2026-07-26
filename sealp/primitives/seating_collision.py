@@ -1,9 +1,12 @@
-"""Mesh-accurate seating collision for parts that mate through holes/slots.
+"""Mesh-accurate seating collision for parts that mate with already-assembled parts.
 
-Tower ``middle_plate`` rests on four posts whose corners pass through plate holes.
-AABB/box cdprims treat the plate as a solid slab and falsely allow paths that sweep
-through post bodies.  This module upgrades mating partners to triangle cdmesh and
-checks the *held object* during the final seating segment.
+Removing mating partners from the placement obstacle set is what lets a plate be seated between
+posts at all, but doing it wholesale also lets the path sweep *through* those posts.  The two are
+separated here: partners stay checked, only with triangle mesh instead of the box cdprim, so a
+plate with holes is not treated as a solid slab and a gripper finger cannot pass through a post.
+
+Which parts count as mating is decided geometrically by
+:mod:`sealp.assembly_sequence.mating_detection`; nothing in this module is assembly specific.
 """
 
 from __future__ import annotations
@@ -16,70 +19,70 @@ import wrs.modeling.constant as const
 
 Pose = Tuple[np.ndarray, np.ndarray]
 
-TOWER_MIDDLE_PLATE_POSTS: Tuple[str, ...] = (
-    "post_bl", "post_fl", "post_br", "post_fr",
-)
 
-
-def mesh_mating_partner_ids(part_id: str, asm_part_ids: Iterable[str]) -> Tuple[str, ...]:
-    """Return mating partner part ids that need triangle mesh checks for ``part_id``."""
-    ids = set(asm_part_ids)
-    if part_id == "middle_plate":
-        return tuple(p for p in TOWER_MIDDLE_PLATE_POSTS if p in ids)
-    return ()
-
-
-def to_triangle_cdmesh(cmodel) -> object:
-    """Copy a collision model and use triangle cdmesh for accurate mesh-mesh tests."""
+def to_triangle_cdmesh(cmodel):
+    """Copy a collision model set up for triangle-mesh (not box) collision queries."""
     out = cmodel.copy()
     try:
         out.change_cdmesh_type(cdmesh_type=const.CDMeshType.DEFAULT)
     except Exception:
         pass
-    try:
-        out.change_cdprim_type(cdprim_type=const.CDPrimType.AABB)
-    except Exception:
-        pass
-    if not hasattr(out, "_sealp_cdprim_type"):
-        out._sealp_cdprim_type = "triangles"
-    else:
-        out._sealp_cdprim_type = "triangles"
-    pid = getattr(cmodel, "_sealp_part_id", None)
-    if pid is not None:
-        out._sealp_part_id = pid
-    role = getattr(cmodel, "_sealp_role", None)
-    if role is not None:
-        out._sealp_role = role
+    for attr in ("_sealp_part_id", "_sealp_role"):
+        value = getattr(cmodel, attr, None)
+        if value is not None:
+            setattr(out, attr, value)
+    out._sealp_cdprim_type = "triangles"
     return out
 
 
-def mesh_mating_obstacles(obstacle_list: Sequence,
-                          partner_ids: Sequence[str]) -> List:
-    """Build triangle-mesh copies of obstacles whose ``_sealp_part_id`` is a mating partner."""
-    want = set(partner_ids)
+def mesh_obstacles_for_parts(obstacle_list: Sequence, part_ids: Iterable[str]) -> List:
+    """Triangle-mesh copies of the obstacles whose ``_sealp_part_id`` is in ``part_ids``."""
+    want = {p for p in part_ids}
     if not want:
         return []
-    out: List = []
-    for obs in obstacle_list:
-        pid = getattr(obs, "_sealp_part_id", None)
-        if pid is None or pid not in want:
-            continue
-        out.append(to_triangle_cdmesh(obs))
-    return out
+    return [to_triangle_cdmesh(obs) for obs in obstacle_list
+            if getattr(obs, "_sealp_part_id", None) in want]
+
+
+def direct_transport_seating_kwargs(mating_part_ids: Iterable[str],
+                                    obstacle_list: Sequence) -> dict:
+    """``DirectTransportPrimitive.plan`` kwargs enabling phased mesh seating."""
+    mesh_obs = mesh_obstacles_for_parts(obstacle_list, mating_part_ids)
+    if not mesh_obs:
+        return {}
+    return {"seating_mesh_obstacles": mesh_obs}
+
+
+def _end_effector(robot):
+    ee = getattr(robot, "end_effector", None)
+    if ee is not None:
+        return ee
+    delegator = getattr(robot, "delegator", None)
+    return getattr(delegator, "end_effector", None) if delegator is not None else None
 
 
 def _held_objects(robot) -> List:
-    ee = getattr(robot, "end_effector", None)
-    if ee is None:
-        delegator = getattr(robot, "delegator", None)
-        ee = getattr(delegator, "end_effector", None) if delegator is not None else None
+    ee = _end_effector(robot)
     if ee is None:
         return []
     return [lnk.cmodel for lnk in getattr(ee, "oiee_list", []) or []]
 
 
+def gripper_mesh_collides(robot, mesh_obstacles: Sequence) -> bool:
+    """The gripper may never intersect a mating partner, not even at the seated pose."""
+    if not mesh_obstacles:
+        return False
+    ee = _end_effector(robot)
+    if ee is None:
+        return False
+    try:
+        return bool(ee.is_mesh_collided(cmodel_list=list(mesh_obstacles)))
+    except Exception:
+        return False
+
+
 def held_object_mesh_collides(robot, mesh_obstacles: Sequence) -> bool:
-    """True when any held object triangle mesh intersects an obstacle triangle mesh."""
+    """True when a held object's triangle mesh intersects a mating partner's triangle mesh."""
     if not mesh_obstacles:
         return False
     for obj in _held_objects(robot):
@@ -87,68 +90,37 @@ def held_object_mesh_collides(robot, mesh_obstacles: Sequence) -> bool:
             if obj.is_mcdwith(list(mesh_obstacles)):
                 return True
         except Exception:
-            return True
+            continue
     return False
 
 
 def object_pose_mesh_collides(obj_cmodel, pos, rotmat, mesh_obstacles: Sequence) -> bool:
-    """Mesh-mesh test for a free object at ``(pos, rotmat)``."""
+    """Triangle-mesh test for a free object placed at ``(pos, rotmat)``."""
     if not mesh_obstacles:
         return False
-    obj = obj_cmodel.copy()
+    obj = to_triangle_cdmesh(obj_cmodel)
     obj.pos = np.asarray(pos, dtype=float)
     obj.rotmat = np.asarray(rotmat, dtype=float)
     try:
         return bool(obj.is_mcdwith(list(mesh_obstacles)))
     except Exception:
-        return True
+        return False
 
 
-def goal_mating_pose_valid(obj_cmodel, goal_pose: Pose,
+def seating_waypoint_valid(robot,
                            mesh_obstacles: Sequence,
                            *,
-                           pos_tol: float = 2e-3,
-                           rot_tol: float = 5e-2) -> bool:
-    """At the certified goal pose the held mesh should clear mating partners (holes/slots)."""
-    if not mesh_obstacles:
-        return True
-    gp, gr = goal_pose
-    return not object_pose_mesh_collides(obj_cmodel, gp, gr, mesh_obstacles)
+                           is_final: bool) -> Tuple[bool, str]:
+    """Mesh checks for one waypoint of the stand-off -> goal seating segment.
 
-
-def waypoint_seating_valid(robot,
-                           mesh_obstacles: Sequence,
-                           *,
-                           is_final: bool,
-                           obj_template,
-                           goal_pose: Optional[Pose] = None) -> bool:
-    """Held-object mesh check for one seating waypoint.
-
-    Non-final waypoints must have zero mesh intersection with mating partners.
-    The final waypoint must match the goal mating pose (mesh clear at goal).
+    The gripper is never allowed to intersect a mating partner.  The held object may only touch
+    them at the very last waypoint, where resting on/into them is what the assembly asks for; any
+    earlier intersection means the part is being driven through the partner.
     """
     if not mesh_obstacles:
-        return True
-    if is_final:
-        if goal_pose is None:
-            return not held_object_mesh_collides(robot, mesh_obstacles)
-        held = _held_objects(robot)
-        if not held:
-            return goal_mating_pose_valid(obj_template, goal_pose, mesh_obstacles)
-        gp, gr = goal_pose
-        obj = held[0]
-        return not object_pose_mesh_collides(obj, obj.pos, obj.rotmat, mesh_obstacles)
-    return not held_object_mesh_collides(robot, mesh_obstacles)
-
-
-def direct_transport_seating_kwargs(part_id: str,
-                                    asm_part_ids: Iterable[str],
-                                    transit_obstacles: Sequence) -> dict:
-    """Keyword args for phased mesh seating (e.g. tower middle_plate vs four posts)."""
-    partners = mesh_mating_partner_ids(part_id, asm_part_ids)
-    if not partners:
-        return {}
-    mesh_obs = mesh_mating_obstacles(transit_obstacles, partners)
-    if not mesh_obs:
-        return {}
-    return {"seating_mesh_obstacles": mesh_obs}
+        return True, ""
+    if gripper_mesh_collides(robot, mesh_obstacles):
+        return False, "gripper mesh intersects a mating partner"
+    if not is_final and held_object_mesh_collides(robot, mesh_obstacles):
+        return False, "held object mesh passes through a mating partner"
+    return True, ""

@@ -89,6 +89,7 @@ from sealp.layout import WorkspaceLayout
 from sealp.layout.dual_staging_search import find_obstacle_def
 from sealp.primitives.transport import TransportPrimitive
 from sealp.primitives.direct_transport import DirectTransportPrimitive
+from sealp.assembly_sequence.mating_detection import MatingCache
 from sealp.primitives.seating_collision import direct_transport_seating_kwargs
 from sealp.primitives.regrasp import SingleArmRegraspPrimitive
 
@@ -2088,30 +2089,17 @@ class WeightedInitialLayoutSearcher:
     # --------------------------------------------------------
 
     def _contact_exclusion_map(self) -> Dict[str, List[str]]:
-        """默认接触/插接豁免表 (惰性构建, 缓存到 self).
+        """asmdef 侧车文件声明的额外接触件 (惰性构建, 缓存到 self).
 
-        与执行脚本 _default_contact_exclusion_map 保持一致:
-            - top_cross 插入 middle_plate 顶面方孔 -> placement 排除 middle_plate;
-            - middle_plate 落在四根 post 顶上 -> placement 排除四根 post;
-              transit/落位 mesh 检测见 DirectTransportPrimitive。
-        另外每个零件 asmdef 里的 direct parent 也会在 _contact_exclusion_set 里自动排除。
-
-        上面两条是按 tower 的零件名硬编码的, 换一个装配体就不会触发 (例如
-        stack_cube 的承托板叫 mid_plate 而不是 middle_plate)。所以还会读取
-        asmdef 同目录下的 `<name>_contacts.json` 侧车文件: 那里按几何算出了
-        每一步除 parent 之外真正接触到的已装件。没有侧车文件时行为与之前逐字
-        节相同, 因此 chair/tower 已有结果保持可复现。
+        主判据是 `_auto_mating_parts`: asmdef 的 direct parent + 最终 goal 位姿下的真实
+        表面距离, 与装配体无关。这里只叠加 asmdef 同目录下 `<name>_contacts.json` 里预先
+        算好的接触表(如果有), 作为自动检测的补充。
         """
         cached = getattr(self, "_contact_excl_map_cache", None)
         if cached is not None:
             return cached
         part_ids = set(self.part_order)
         out: Dict[str, List[str]] = {}
-        if "top_cross" in part_ids and "middle_plate" in part_ids:
-            out.setdefault("top_cross", []).append("middle_plate")
-        post_ids = [p for p in ("post_bl", "post_fl", "post_br", "post_fr") if p in part_ids]
-        if "middle_plate" in part_ids and post_ids:
-            out.setdefault("middle_plate", []).extend(post_ids)
         for pid, others in self._contact_sidecar().items():
             if pid not in part_ids:
                 continue
@@ -2147,21 +2135,33 @@ class WeightedInitialLayoutSearcher:
         self._part_parent_cache = out
         return out
 
+    def _auto_mating_parts(self, current_pid: str, placed: set) -> set:
+        """按 asmdef parent + 最终 goal 位姿几何距离自动判定的接触件。
+
+        goal_models 会随装配区位姿重建, 所以缓存跟着一起失效。
+        """
+        cache = getattr(self, "_mating_cache", None)
+        if cache is None or getattr(self, "_mating_cache_key", None) != id(self.goal_models):
+            cache = MatingCache(goal_model_of=self.goal_models.get,
+                                parent_of=self._part_parent_map().get,
+                                verbose=bool(getattr(self, "verbose", False)))
+            self._mating_cache = cache
+            self._mating_cache_key = id(self.goal_models)
+        return cache.get(current_pid, placed)
+
     def _contact_exclusion_set(self, current_pid: Optional[str], placed: set) -> set:
         """规划 current_pid 时应临时排除的"已装接触件"集合。
 
-        = direct parent (非 fixture) ∪ 接触表声明 , 再 ∩ 已装件。
+        = 自动检测的 mating parts ∪ 侧车文件声明 , 再 ∩ 已装件。
         只有"已经装好"的接触件才豁免; 还没装的零件仍应作为 staging 障碍。
         """
         if not current_pid:
             return set()
-        excl = set()
-        parent = self._part_parent_map().get(current_pid)
-        if parent and parent != "fixture":
-            excl.add(parent)
+        placed = placed or set()
+        excl = set(self._auto_mating_parts(current_pid, placed))
         for p in self._contact_exclusion_map().get(current_pid, []):
             excl.add(p)
-        return {p for p in excl if p in (placed or set())}
+        return {p for p in excl if p in placed}
 
     def _planner_obstacles(self, obs: List, current_pid: Optional[str] = None,
                            placed: Optional[set] = None) -> List:
@@ -3055,6 +3055,9 @@ class WeightedInitialLayoutSearcher:
                 # 运输/RRT 用完整障碍; 抓取/落位 IK 用接触豁免障碍(口径同执行脚本)。
                 obs = self._l3_obstacles(pid, placed, mode=obstacle_mode)
                 placement_obs = self._l3_placement_obstacles(pid, placed, mode=obstacle_mode)
+                # 落位段 mesh 检测用的接触件; 放在 self 上而不是加参数, 以免打断已有的
+                # _l3_plan_part 重写(heatmap_pso 等子类)。
+                self._l3_mating_parts = self._contact_exclusion_set(pid, placed)
 
                 # 单个零件的运动验证走可重写钩子，子类可对特定零件改用换手等，
                 # 使 L3 验证方式与真实执行(动画)一致。
@@ -3283,7 +3286,8 @@ class WeightedInitialLayoutSearcher:
                     goal_pose_list=[(np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))],
                     obstacle_list=obs,
                     grasp_obstacle_list=placement_obs,
-                    **direct_transport_seating_kwargs(pid, self.part_order, obs),
+                    **direct_transport_seating_kwargs(
+                        getattr(self, "_l3_mating_parts", ()) or (), obs),
                     **tk,
                 )
             except Exception as e:
