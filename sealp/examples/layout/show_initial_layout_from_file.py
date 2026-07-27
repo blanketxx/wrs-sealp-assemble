@@ -9,7 +9,7 @@
 1. 读取 .layout 文件；
 2. 读取 .asmdef 文件；
 3. 显示 46×23 真实贯穿孔洞洞板 work_table，桌面透明度固定为 1；
-4. 显示机器人 home 姿态，方便检查零件是否和手臂/夹爪穿模；
+4. 只显示左机械臂 home 姿态，不显示右机械臂；
 5. 显示每个零件的初始 staging 位置；
 6. 如果某个零件是 preassembled，例如 base_plate，则以实心模型显示在装配区；
 7. 可选显示最终目标装配位姿 ghost。
@@ -89,7 +89,6 @@ try:
 except Exception:
     pda = None
 
-
 DEFAULT_ASMDEF = os.path.join(
     SEALP_ROOT, "assembly_sequence", "_demo_output", "topdown_tower.asmdef"
 )
@@ -116,10 +115,10 @@ def make_model(mesh_path: str, rgba=None):
 
 
 def _square_ring_points(
-    half_x: float,
-    half_y: float,
-    radius: float,
-    segments: int,
+        half_x: float,
+        half_y: float,
+        radius: float,
+        segments: int,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """生成一个方形单元外圈和圆孔内圈，二者顶点数一致。"""
     segments = max(8, int(math.ceil(segments / 4.0)) * 4)
@@ -146,20 +145,20 @@ def _square_ring_points(
 
 
 def _append_perforated_cell(
-    vertices,
-    faces,
-    cx: float,
-    cy: float,
-    z_bottom: float,
-    z_top: float,
-    pitch_x: float,
-    pitch_y: float,
-    radius: float,
-    segments: int,
-    close_bottom: bool,
-    close_right: bool,
-    close_top: bool,
-    close_left: bool,
+        vertices,
+        faces,
+        cx: float,
+        cy: float,
+        z_bottom: float,
+        z_top: float,
+        pitch_x: float,
+        pitch_y: float,
+        radius: float,
+        segments: int,
+        close_bottom: bool,
+        close_right: bool,
+        close_top: bool,
+        close_left: bool,
 ) -> None:
     """向网格中添加一个带真实贯穿圆孔的矩形单元。"""
     outer_xy, inner_xy = _square_ring_points(
@@ -219,8 +218,8 @@ def _append_perforated_cell(
 
 
 def _build_perforated_table_mesh(
-    extent: Sequence[float],
-    pos: Sequence[float],
+        extent: Sequence[float],
+        pos: Sequence[float],
 ) -> Tuple[trm.Trimesh, dict]:
     """按 work_table 当前尺寸生成 46×23 真实贯穿孔洞洞板。"""
     extent = np.asarray(extent, dtype=float).reshape(3)
@@ -297,8 +296,8 @@ def _build_perforated_table_mesh(
 
 
 def _attach_perforated_table(
-    config_path: str,
-    base,
+        config_path: str,
+        base,
 ):
     """显示完全不透明的洞洞板 work_table。"""
     extent, pos, rgba = load_table_box(config_path, "work_table")
@@ -442,6 +441,7 @@ def _metadata_map(layout: WorkspaceLayout, key: str) -> Dict:
 
 
 def attach_robot_home(base, layout: WorkspaceLayout, show_robot: bool = True):
+    """只显示左机械臂，不显示右机械臂/双臂整体模型。"""
     if not show_robot:
         return None
 
@@ -449,9 +449,15 @@ def attach_robot_home(base, layout: WorkspaceLayout, show_robot: bool = True):
         print("[WARN] 无法导入 DualPantheraHTNoBody，跳过机器人显示。")
         return None
 
-    robot_base_pos = np.asarray(getattr(layout, "robot_base_pos", np.zeros(3)), dtype=float)
-    robot_base_rotmat = np.asarray(getattr(layout, "robot_base_rotmat", np.eye(3)), dtype=float)
+    robot_base_pos = np.asarray(
+        getattr(layout, "robot_base_pos", np.zeros(3)), dtype=float
+    )
+    robot_base_rotmat = np.asarray(
+        getattr(layout, "robot_base_rotmat", np.eye(3)), dtype=float
+    )
 
+    # 仍构造双臂机器人对象，以保证模型/坐标配置与执行程序一致；
+    # 但可视化时只 attach lft_arm 的 mesh，右臂完全不显示。
     robot = pda.DualPantheraHTNoBody(
         pos=robot_base_pos,
         rotmat=robot_base_rotmat,
@@ -461,16 +467,20 @@ def attach_robot_home(base, layout: WorkspaceLayout, show_robot: bool = True):
 
     try:
         robot.lft_arm.goto_given_conf(HOME_JV)
-        robot.rgt_arm.goto_given_conf(HOME_JV)
     except Exception:
         pass
 
     try:
-        robot.gen_meshmodel(alpha=0.22).attach_to(base)
-        mgm.gen_frame(pos=robot_base_pos, rotmat=robot_base_rotmat, ax_length=0.12).attach_to(base)
-        print(f"[ROBOT] home shown at {np.round(robot_base_pos, 4).tolist()}")
+        robot.lft_arm.gen_meshmodel(alpha=0.32).attach_to(base)
+        print(
+            f"[ROBOT] LEFT arm only, home at "
+            f"{np.round(robot_base_pos, 4).tolist()}"
+        )
     except Exception as e:
-        print(f"[WARN] robot mesh 显示失败: {type(e).__name__}: {e}")
+        print(
+            f"[WARN] 左机械臂 mesh 显示失败: "
+            f"{type(e).__name__}: {e}"
+        )
 
     return robot
 
@@ -498,7 +508,8 @@ def attach_goal_ghosts(base, asm: AssemblyDef, world_poses: Dict, show_goal_ghos
         print(f"ghost {pid:14s}: pos={np.round(gp, 4).tolist()}")
 
 
-def attach_initial_layout(base, asm: AssemblyDef, layout: WorkspaceLayout, part_order: List[str]):
+def attach_initial_layout(base, asm: AssemblyDef, layout: WorkspaceLayout, part_order: List[str],
+                          show_frames: bool = True):
     pose_tag = _metadata_map(layout, "pose_tag")
     rot_name = _metadata_map(layout, "rot_name")
     arm_choice = _metadata_map(layout, "arm_choice")
@@ -549,10 +560,11 @@ def attach_initial_layout(base, asm: AssemblyDef, layout: WorkspaceLayout, part_
         cm.rotmat = rot
         cm.attach_to(base)
 
-        try:
-            mgm.gen_frame(pos=pos, rotmat=rot, ax_length=0.04).attach_to(base)
-        except Exception:
-            pass
+        if show_frames:
+            try:
+                mgm.gen_frame(pos=pos, rotmat=rot, ax_length=0.04).attach_to(base)
+            except Exception:
+                pass
 
         shown.append(pid)
 
@@ -577,9 +589,10 @@ def main():
     parser.add_argument("--layout", default=DEFAULT_LAYOUT, help=".layout 文件路径")
     parser.add_argument("--asmdef", default=DEFAULT_ASMDEF, help=".asmdef 文件路径")
     parser.add_argument("--config", default=DEFAULT_CONFIG, help="sample_config.yaml 路径")
-    parser.add_argument("--hide-goal-ghosts", action="store_true", help="不显示最终目标 ghost")
-    parser.add_argument("--hide-robot", action="store_true", help="不显示机器人 home 姿态")
-    parser.add_argument("--hide-env", action="store_true", help="不显示 work_table 等环境")
+    parser.add_argument("--show-goal-ghosts", action="store_true", help="显示最终目标 ghost；默认不显示")
+    parser.add_argument("--hide-robot", action="store_true", help="不显示左机械臂 home 姿态")
+    parser.add_argument("--hide-env", action="store_true", help="不显示洞洞板 work_table 等环境")
+    parser.add_argument("--show-frames", action="store_true", help="显示装配中心和零件坐标系；默认不显示")
     parser.add_argument(
         "--cam-pos",
         default="1.05,-1.25,0.85",
@@ -621,7 +634,12 @@ def main():
         lookat_pos=assembly_pos + np.array([0.0, 0.0, 0.10]),
     )
 
-    mgm.gen_frame(pos=assembly_pos, rotmat=assembly_rot, ax_length=0.12).attach_to(base)
+    if args.show_frames:
+        mgm.gen_frame(
+            pos=assembly_pos,
+            rotmat=assembly_rot,
+            ax_length=0.12,
+        ).attach_to(base)
 
     if not args.hide_env:
         _load_env_obstacles(config_path, base)
@@ -637,20 +655,20 @@ def main():
         base,
         asm,
         world_poses,
-        show_goal_ghosts=not args.hide_goal_ghosts,
+        show_goal_ghosts=args.show_goal_ghosts,
     )
 
-    attach_initial_layout(base, asm, layout, part_order)
+    attach_initial_layout(base, asm, layout, part_order, show_frames=args.show_frames)
 
     print("\n提示：")
     print("  绿色实心模型通常表示 preassembled，例如 base_plate。")
     print("  彩色模型表示 layout 中的初始 staging 零件。")
-    print("  半透明灰色模型表示最终目标装配 ghost。")
-    print("  每个零件中心的小坐标系表示该零件初始姿态。")
+    print("  默认只显示：左机械臂 + 洞洞板 + 初始布局零件。")
+    print("  --show-goal-ghosts 可额外显示最终目标 ghost。")
+    print("  --show-frames 可额外显示坐标系。")
 
     base.run()
 
 
 if __name__ == "__main__":
     main()
-  

@@ -139,7 +139,7 @@ DEFAULT_CONFIG = os.path.join(SEALP_ROOT, "config", "sample_config.yaml")
 DEFAULT_GRASP_DIR = os.path.join(SEALP_ROOT, "examples", "grasp", "tower_grasp")
 DEFAULT_HANDOVER_DIR = os.path.join(SEALP_ROOT, "examples", "grasp", "tower_handover")
 DEFAULT_MOTION_CACHE_DIR = os.path.join(SEALP_ROOT, "examples", "motion", "_output")
-MOTION_CACHE_FORMAT_VERSION = "2.5-symmetry"
+MOTION_CACHE_FORMAT_VERSION = "2.6-l2-witness"
 
 # middle_plate 直接走换手，不走单臂 pick-place（默认关，见 --middle-plate-handover）
 HANDOVER_PART_IDS = frozenset({"middle_plate"})
@@ -2343,16 +2343,241 @@ class LayoutSequenceVisualizer:
             f"last={last_reason}"
         )
 
+    @staticmethod
+    def _single_grasp_collection(gc: GraspCollection, gid: int) -> Optional[GraspCollection]:
+        """Build a one-grasp collection while keeping the original pickle untouched."""
+        try:
+            gid = int(gid)
+            if gid < 0 or gid >= len(gc):
+                return None
+            return GraspCollection(
+                end_effector=getattr(gc, "end_effector", None),
+                grasp_list=[gc[gid]],
+            )
+        except Exception:
+            return None
+
+    @staticmethod
+    def _rot_error_deg(r0, r1) -> float:
+        try:
+            r0 = np.asarray(r0, dtype=float).reshape(3, 3)
+            r1 = np.asarray(r1, dtype=float).reshape(3, 3)
+            c = float((np.trace(r0.T @ r1) - 1.0) * 0.5)
+            return float(np.degrees(np.arccos(np.clip(c, -1.0, 1.0))))
+        except Exception:
+            return float("inf")
+
+    def _saved_grasp_witness(self, pid: str, full_gc: GraspCollection) -> Optional[dict]:
+        """Read the L2/final common-grasp witness saved in ``.layout`` metadata.
+
+        Preferred source is metadata.grasp_witness.  For older converted layouts,
+        certified metadata.per_step_certification[pid].gids is accepted as a
+        compatibility source.  A stale witness is never trusted after the staging
+        pose changes.
+        """
+        meta = getattr(self.layout, "metadata", {}) or {}
+        raw = None
+        source = ""
+
+        gw = meta.get("grasp_witness", {}) or {}
+        if isinstance(gw, dict):
+            cand = gw.get(pid)
+            if isinstance(cand, dict) and cand.get("gids"):
+                raw = dict(cand)
+                source = "metadata.grasp_witness"
+
+        if raw is None:
+            certs = meta.get("per_step_certification", {}) or {}
+            cand = certs.get(pid) if isinstance(certs, dict) else None
+            if isinstance(cand, dict) and bool(cand.get("certified", False)) and cand.get("gids"):
+                raw = dict(cand)
+                source = "metadata.per_step_certification"
+
+        if raw is None:
+            print(f"    [WITNESS/NONE] pid={pid}: no saved common-grasp gids")
+            return None
+
+        # Reject a witness if the current layout pose no longer matches the pose it certified.
+        st_model = self.staging_models.get(pid)
+        if st_model is not None:
+            saved_pos = raw.get("staging_pos")
+            if saved_pos is not None:
+                pos_err = float(np.linalg.norm(
+                    np.asarray(saved_pos, dtype=float).reshape(3)
+                    - np.asarray(st_model.pos, dtype=float).reshape(3)
+                ))
+                if pos_err > 1.0e-5:
+                    print(
+                        f"    [WITNESS/STALE] pid={pid}: staging position changed "
+                        f"(err={pos_err:.6g} m); ignore saved gids"
+                    )
+                    return None
+
+            saved_rot = raw.get("staging_rotmat")
+            if saved_rot is not None:
+                rot_err = self._rot_error_deg(saved_rot, st_model.rotmat)
+                if rot_err > 1.0e-3:
+                    print(
+                        f"    [WITNESS/STALE] pid={pid}: staging rotation changed "
+                        f"(err={rot_err:.6g} deg); ignore saved gids"
+                    )
+                    return None
+
+        gids = []
+        for value in raw.get("gids", []):
+            try:
+                gid = int(value)
+            except Exception:
+                continue
+            if 0 <= gid < len(full_gc) and gid not in gids:
+                gids.append(gid)
+
+        preferred_gid = raw.get("preferred_gid")
+        try:
+            preferred_gid = int(preferred_gid) if preferred_gid is not None else None
+        except Exception:
+            preferred_gid = None
+        if preferred_gid in gids:
+            gids.remove(preferred_gid)
+            gids.insert(0, preferred_gid)
+
+        if not gids:
+            print(
+                f"    [WITNESS/INVALID] pid={pid}: saved gids are outside current "
+                f"grasp library n={len(full_gc)}; use full fallback"
+            )
+            return None
+
+        witness = {
+            "source": source,
+            "gids": gids,
+            "arm": raw.get("arm"),
+            "preferred_gid": preferred_gid,
+            "certification_level": raw.get("certification_level", "L2"),
+        }
+        print(
+            f"    [WITNESS] pid={pid} source={source} "
+            f"level={witness['certification_level']} arm={witness['arm']} "
+            f"gids={gids}"
+        )
+        return witness
+
+    def _light_robot_snapshot(self):
+        """Snapshot arm joint/EE states without touching WRS backup stacks."""
+        out = []
+        for arm in iter_layout_arms(self.robot, single_arm=self.single_arm_mode):
+            out.append((arm, _get_arm_jv(arm).copy(), copy.deepcopy(_get_arm_ee(arm))))
+        return out
+
+    @staticmethod
+    def _restore_light_robot_snapshot(snapshot) -> None:
+        for arm, jv, ee in snapshot or []:
+            _goto_arm(arm, jv, ee)
+
     def _try_plan_step(self, pid: str, placed: set):
+        """Plan one step with saved L2 common grasps first, then robust full fallback.
+
+        Phase A tries each original saved gid individually.  Therefore a success
+        unambiguously identifies the exact original pickle gid and no local
+        sub-collection reindexing can hide which grasp was reused.
+
+        Phase B is the unchanged full grasp library.  It runs only when every
+        saved witness gid fails (or when the layout has no valid witness).
+        """
+        full_gc = self.grasps.get(pid)
+        if full_gc is None or len(full_gc) == 0:
+            return None, f"{pid}: grasp collection missing or empty"
+
+        # Handover has its own graph/regrasp semantics; keep its full collection.
+        if self._uses_handover_direct(pid):
+            print(f"    [WITNESS/SKIP] pid={pid}: handover mode uses full grasp collection")
+            return self._try_plan_step_core(
+                pid, placed, gc_override=full_gc, phase_label="handover-full-library"
+            )
+
+        witness = self._saved_grasp_witness(pid, full_gc)
+        witness_errors: List[str] = []
+        step_snapshot = self._light_robot_snapshot()
+
+        if witness is not None:
+            for original_gid in witness["gids"]:
+                # Every witness is tested from exactly the same robot state.
+                self._restore_light_robot_snapshot(step_snapshot)
+                one_gc = self._single_grasp_collection(full_gc, original_gid)
+                if one_gc is None:
+                    witness_errors.append(f"gid={original_gid}: cannot build one-grasp collection")
+                    continue
+
+                print(
+                    f"    [WITNESS/TRY] pid={pid} original_gid={original_gid} "
+                    f"saved_arm={witness.get('arm')}"
+                )
+                sm, err = self._try_plan_step_core(
+                    pid,
+                    placed,
+                    gc_override=one_gc,
+                    phase_label=f"L2-witness(original_gid={original_gid})",
+                    preferred_arm_override=witness.get("arm"),
+                )
+                if sm is not None:
+                    # Keep this on the StepMotion so the cache/debugger can report it later.
+                    try:
+                        sm.saved_grasp_gid = int(original_gid)
+                        sm.grasp_source = "L2-witness"
+                    except Exception:
+                        pass
+                    print(
+                        f"    [WITNESS/REUSED] pid={pid} original_gid={original_gid} "
+                        f"motion={sm.motion_tag}"
+                    )
+                    return sm, ""
+
+                witness_errors.append(f"gid={original_gid}: {err}")
+                print(
+                    f"    [WITNESS/FAIL] pid={pid} original_gid={original_gid}: {err}"
+                )
+
+            print(
+                f"    [WITNESS/FALLBACK] pid={pid}: all {len(witness['gids'])} saved "
+                f"gids failed; scanning full grasp library n={len(full_gc)}"
+            )
+        else:
+            print(
+                f"    [WITNESS/FALLBACK] pid={pid}: no usable saved witness; "
+                f"scanning full grasp library n={len(full_gc)}"
+            )
+
+        self._restore_light_robot_snapshot(step_snapshot)
+        sm, err = self._try_plan_step_core(
+            pid, placed, gc_override=full_gc, phase_label="full-library-fallback"
+        )
+        if sm is not None:
+            try:
+                sm.grasp_source = "full-library-fallback"
+            except Exception:
+                pass
+            print(f"    [FALLBACK/SOLVED] pid={pid}: full grasp library found a plan")
+            return sm, ""
+
+        if witness_errors:
+            err = (
+                f"{err}; saved-witness attempts also failed: "
+                + " | ".join(witness_errors)
+            )
+        return None, err
+
+    def _try_plan_step_core(self, pid: str, placed: set, gc_override=None, phase_label: str = "full-library", preferred_arm_override: Optional[str] = None):
         if pid not in self.staging_models:
             return None, f"{pid}: staging model missing"
 
         if pid not in self.world_poses:
             return None, f"{pid}: goal world pose missing"
 
-        gc = self.grasps.get(pid)
+        gc = gc_override if gc_override is not None else self.grasps.get(pid)
         if gc is None or len(gc) == 0:
             return None, f"{pid}: grasp collection missing or empty"
+
+        print(f"    [GRASP-PHASE] pid={pid} phase={phase_label} n={len(gc)}")
 
         if self._uses_handover_direct(pid):
             return self._try_middle_plate_handover_step(pid, placed)
@@ -2361,7 +2586,11 @@ class LayoutSequenceVisualizer:
         gp, gr = self.world_poses[pid]
 
         meta = getattr(self.layout, "metadata", {}) or {}
-        preferred_arm = (meta.get("arm_choice", {}) or {}).get(pid)
+        preferred_arm = (
+            preferred_arm_override
+            if preferred_arm_override in ("lft", "rgt")
+            else (meta.get("arm_choice", {}) or {}).get(pid)
+        )
         arm_order = _arm_try_order(pid, preferred_arm, single_arm=self.single_arm_mode)
 
         last_err = ""
@@ -2404,12 +2633,22 @@ class LayoutSequenceVisualizer:
                         # 无强制 Cartesian 直线段的单臂规划: 同一只手臂、同一个 grasp,
                         # 以认证过的 q_pick/q_place 为锚点用 RRT 连接。全程单臂, 不换手,
                         # 不中途放下; IK/关节限位/碰撞照旧严格检查。
+                        # DirectTransport 本身已经包含 release -> retract -> RRT 到 end_jnt_values。
+                        # 对最后一件直接把 end_jnt_values 指定为 HOME_JV，避免后面再依赖
+                        # ev_list 猜测 release frame；后者在自定义 DirectTransport 拼接的
+                        # MotionData 中可能无法稳定识别。
+                        _direct_end_jv = (
+                            np.asarray(HOME_JV, dtype=float)
+                            if pid == self._last_assembly_pid
+                            else None
+                        )
                         res = DirectTransportPrimitive(arm).plan(
                             obj_cmodel=moving,
                             grasp_collection=gc,
                             goal_pose_list=[(np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))],
                             obstacle_list=transit_obs,
                             grasp_obstacle_list=placement_obs,
+                            end_jnt_values=_direct_end_jv,
                             **direct_transport_seating_kwargs(
                                 self.mating_parts(pid, placed), transit_obs),
                             use_auto_symmetry=self.auto_symmetry,
@@ -2466,20 +2705,41 @@ class LayoutSequenceVisualizer:
                 motion_segments = [transport_md]
                 end_jv = np.asarray(getattr(res, "end_jnt_values", HOME_JV), dtype=float)
 
-                # 最后一件必须把 TransportPrimitive 的自动撤离尾巴替换为明确的 HOME 路径。
+                # 最后一件回 HOME：
+                # - DirectTransport 已在上面的 plan() 中显式收到 end_jnt_values=HOME_JV，
+                #   它自己的最后阶段就是 release -> retract -> RRT HOME，因此直接采用。
+                # - 旧 TransportPrimitive 仍保留原来的 release-frame 裁剪 + HOME 重规划逻辑。
                 if pid == self._last_assembly_pid:
-                    motion_segments, home_err = self._build_last_part_home_return(
-                        pid=pid,
-                        arm_tag=arm_tag,
-                        arm=arm,
-                        transport_md=transport_md,
-                        placed=placed,
-                    )
-                    if motion_segments is None:
-                        last_err = f"{pid} {arm_tag} motion={motion_tag}: {home_err}"
-                        print(f"  [NO/FINAL-HOME] {last_err}")
-                        continue
-                    end_jv = np.asarray(HOME_JV, dtype=float)
+                    if motion_tag == LINEAR_FREE_TAG:
+                        end_jv = np.asarray(getattr(res, "end_jnt_values", HOME_JV), dtype=float)
+                        home_err_inf = float(np.max(np.abs(end_jv - np.asarray(HOME_JV, dtype=float))))
+                        if home_err_inf > 1e-3:
+                            last_err = (
+                                f"{pid} {arm_tag} motion={motion_tag}: "
+                                f"DirectTransport did not finish at HOME "
+                                f"(|dq|inf={home_err_inf:.6f})"
+                            )
+                            print(f"  [NO/FINAL-HOME] {last_err}")
+                            continue
+                        motion_segments = [transport_md]
+                        end_jv = np.asarray(HOME_JV, dtype=float)
+                        print(
+                            "  [FINAL/HOME] DirectTransport already includes "
+                            "release -> retract -> RRT HOME; skip release-frame detection."
+                        )
+                    else:
+                        motion_segments, home_err = self._build_last_part_home_return(
+                            pid=pid,
+                            arm_tag=arm_tag,
+                            arm=arm,
+                            transport_md=transport_md,
+                            placed=placed,
+                        )
+                        if motion_segments is None:
+                            last_err = f"{pid} {arm_tag} motion={motion_tag}: {home_err}"
+                            print(f"  [NO/FINAL-HOME] {last_err}")
+                            continue
+                        end_jv = np.asarray(HOME_JV, dtype=float)
 
                 # 必须在对侧手臂 overlay 改写 cm_list 前抽取每段物体真实位姿。
                 obj_pose_per_segment: List[List[Optional[Tuple[np.ndarray, np.ndarray]]]] = []
@@ -2843,6 +3103,8 @@ def _serialize_step_motion(sm: StepMotion, runner=None) -> dict:
         "arm_sides": arm_sides,
         "handover": bool(is_handover),
         "arm_sequence": distinct_arms,
+        "saved_grasp_gid": getattr(sm, "saved_grasp_gid", None),
+        "grasp_source": getattr(sm, "grasp_source", None),
     }
 
 
@@ -3391,7 +3653,7 @@ def main():
         raise FileNotFoundError(f"layout 不存在: {layout_path}")
 
     print("=" * 78)
-    print("Execute Layout Sequence Visualizer [v5 middle_plate handover]")
+    print("Execute Layout Sequence Visualizer [v6 L2 witness reuse + fallback]")
     print(f"asmdef     = {asmdef_path}")
     print(f"layout     = {layout_path}")
     print(f"config     = {config_path}")
@@ -3538,9 +3800,16 @@ def main():
             via = "regrasp"
         else:
             via = "single-arm"
+        grasp_src = getattr(sm, "grasp_source", None)
+        grasp_gid = getattr(sm, "saved_grasp_gid", None)
+        grasp_note = (
+            f" grasp={grasp_src}:{grasp_gid}"
+            if grasp_src is not None and grasp_gid is not None
+            else (f" grasp={grasp_src}" if grasp_src is not None else "")
+        )
         print(
             f"  [OK]   step={sm.step_id:2d} pid={sm.part_id:14s} "
-            f"arm={sm.arm_tag} motion={sm.motion_tag} via={via}"
+            f"arm={sm.arm_tag} motion={sm.motion_tag} via={via}{grasp_note}"
         )
 
     print(f"失败步骤数: {len(summary.failed_steps)}")

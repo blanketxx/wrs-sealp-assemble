@@ -33,12 +33,11 @@ class InterplatedMotion(object):
         def wrapper(self, *args, **kwargs):
             if getattr(self, "toggle_keep", True):
                 self.robot.backup_state()
-                result = method(self, *args, **kwargs)
-                self.robot.restore_state()
-                return result
-            else:
-                result = method(self, *args, **kwargs)
-                return result
+                try:
+                    return method(self, *args, **kwargs)
+                finally:
+                    self.robot.restore_state()
+            return method(self, *args, **kwargs)
 
         return wrapper
 
@@ -54,12 +53,11 @@ class InterplatedMotion(object):
         def wrapper(self, *args, **kwargs):
             if getattr(self, "toggle_off_eecd", True):
                 self.robot.toggle_off_eecd()
-                result = method(self, *args, **kwargs)
-                self.robot.toggle_on_eecd()
-                return result
-            else:
-                result = method(self, *args, **kwargs)
-                return result
+                try:
+                    return method(self, *args, **kwargs)
+                finally:
+                    self.robot.toggle_on_eecd()
+            return method(self, *args, **kwargs)
 
         return wrapper
 

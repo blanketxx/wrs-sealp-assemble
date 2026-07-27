@@ -3,9 +3,9 @@
 Parts (mesh XY offsets are already baked into ``ao`` / ``tu``)::
 
     rectangular  (70x70x25 mm, centered)     -- base on fixture
-      -> cylinder   (Ø40 x 100 mm, centered) -- stands on base
       -> ao         (40x70x30 mm, +X biased) -- seats on base
       -> tu         (50x70x30 mm, -X biased) -- seats on base
+      -> cylinder   (Ø40 x 100 mm, centered) -- last; stands on base
 
 All insertions use world ``insertion_axis = [0, 0, -1]``.
 Child ``rel_pos.z`` = parent (rectangular) height so bottoms sit on the base top.
@@ -25,8 +25,8 @@ ASSET_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "assets", "models", "second"))
 OUT_DIR = os.path.join(os.path.dirname(__file__), "_demo_output")
 
-# Assembly order: base first, then the three parts that seat on it.
-PART_ORDER = ("rectangular", "cylinder", "ao", "tu")
+# Assembly order: base first; cylinder is the last placement step.
+PART_ORDER = ("rectangular", "ao", "tu", "cylinder")
 BASE = "rectangular"
 
 
@@ -42,8 +42,8 @@ def generate() -> AssemblyDef:
     asm = AssemblyDef(
         name="SecondAssembly",
         description=(
-            "Assembly from sealp/assets/models/second: rectangular base with "
-            "cylinder / ao / tu seated on top along world -Z."
+            "Assembly from sealp/assets/models/second: rectangular base, then "
+            "ao / tu, then cylinder last; all seat along world -Z."
         ),
     )
 

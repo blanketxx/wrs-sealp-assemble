@@ -94,6 +94,21 @@ def held_object_mesh_collides(robot, mesh_obstacles: Sequence) -> bool:
     return False
 
 
+def contact_flags_form_tail(flags: Sequence[bool]) -> bool:
+    """Return True when contact is absent or forms one contiguous tail ending at the goal.
+
+    This is the intended rule for insertion/seating: the part may begin touching its mating
+    partner before the exact final waypoint, but once contact starts it must remain continuous
+    through the end of the segment.  Scattered/mid-path contact is rejected.
+    """
+    flags = [bool(v) for v in flags]
+    idx = [i for i, flag in enumerate(flags) if flag]
+    if not idx:
+        return True
+    contiguous = (idx[-1] - idx[0] + 1) == len(idx)
+    return bool(contiguous and idx[-1] == len(flags) - 1)
+
+
 def object_pose_mesh_collides(obj_cmodel, pos, rotmat, mesh_obstacles: Sequence) -> bool:
     """Triangle-mesh test for a free object placed at ``(pos, rotmat)``."""
     if not mesh_obstacles:
@@ -113,9 +128,10 @@ def seating_waypoint_valid(robot,
                            is_final: bool) -> Tuple[bool, str]:
     """Mesh checks for one waypoint of the stand-off -> goal seating segment.
 
-    The gripper is never allowed to intersect a mating partner.  The held object may only touch
-    them at the very last waypoint, where resting on/into them is what the assembly asks for; any
-    earlier intersection means the part is being driven through the partner.
+    Backward-compatible single-waypoint check.  The gripper is never allowed to intersect a
+    mating partner.  For a complete insertion segment, prefer ``contact_flags_form_tail`` so
+    legitimate sliding/press-fit contact may start shortly before the final waypoint while
+    scattered mid-path penetration is still rejected.
     """
     if not mesh_obstacles:
         return True, ""

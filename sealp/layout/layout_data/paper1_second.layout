@@ -1,0 +1,158 @@
+# SEALP Workspace Layout v1.0
+# paper1_second
+
+format_version: "1.0"
+name: "paper1_second"
+robot_base:
+  pos:
+    - 0.0
+    - 0.0
+    - 0.0
+  rotmat:
+    -
+      - 1.0
+      - 0.0
+      - 0.0
+    -
+      - 0.0
+      - 1.0
+      - 0.0
+    -
+      - 0.0
+      - 0.0
+      - 1.0
+assembly_station:
+  pos:
+    - 0.23350000000000004
+    - 0.2
+    - 0.0
+  rotmat:
+    -
+      - -1.0
+      - -1.2246467991473532e-16
+      - 0.0
+    -
+      - 1.2246467991473532e-16
+      - -1.0
+      - 0.0
+    -
+      - 0.0
+      - 0.0
+      - 1.0
+staging:
+  concave:
+    pos:
+      - 0.23350000000000004
+      - 0.2
+      - 0.0
+    rotmat:
+      -
+        - -1.0
+        - -1.2246467991473532e-16
+        - 0.0
+      -
+        - 1.2246467991473532e-16
+        - -1.0
+        - 0.0
+      -
+        - 0.0
+        - 0.0
+        - 1.0
+  convex:
+    pos:
+      - 0.1335
+      - 0.17500000000000004
+      - 0.0
+    rotmat:
+      -
+        - -0.4999999999999998
+        - -0.8660254037844387
+        - 0.0
+      -
+        - 0.8660254037844387
+        - -0.4999999999999998
+        - 0.0
+      -
+        - 0.0
+        - 0.0
+        - 1.0
+  rectangular_prism:
+    pos:
+      - 0.1335
+      - 0.22500000000000003
+      - 0.0
+    rotmat:
+      -
+        - -0.4999999999999998
+        - -0.8660254037844387
+        - 0.0
+      -
+        - 0.8660254037844387
+        - -0.4999999999999998
+        - 0.0
+      -
+        - 0.0
+        - 0.0
+        - 1.0
+  cylinder:
+    pos:
+      - 0.23350000000000004
+      - 0.2750000000000001
+      - 0.0
+    rotmat:
+      -
+        - 0.8660254037844387
+        - -0.49999999999999994
+        - 0.0
+      -
+        - 0.49999999999999994
+        - 0.8660254037844387
+        - 0.0
+      -
+        - 0.0
+        - 0.0
+        - 1.0
+metadata:
+  search_method: "paper-inspired Algorithm 1 discrete constrained GA; asmdef-driven static assembly layout"
+  score: 0.15496306755460829
+  score_components:
+    manip: 0.004177562113902682
+    dist: 0.15657054866237102
+  part_order:
+    - "concave"
+    - "convex"
+    - "rectangular_prism"
+    - "cylinder"
+  assembly_station_pos:
+    - 0.23350000000000004
+    - 0.2
+    - 0.0
+  preassemble_first_part: true
+  z_offsets:
+    concave: 0.0
+    convex: 0.0
+    rectangular_prism: 0.0
+    cylinder: 0.0
+  per_part_dist:
+    concave: 0.0
+    convex: 0.03905124837953327
+    rectangular_prism: 0.07582875444051554
+    cylinder: 0.099373034571759
+  per_part_manip:
+    concave: 0.0
+    convex: 0.0014401096422450492
+    rectangular_prism: 4.1775621139026815e-05
+    cylinder: 0.0017450259640776542
+  per_part_rot_angle:
+    concave: 0.0
+    convex: 1.0471975511965979
+    rectangular_prism: 1.0471975511965979
+    cylinder: 2.6179938779914944
+  table_top_z: 0.0
+  table_x_range:
+    - -0.0665
+    - 0.5335
+  table_y_range:
+    - -0.3
+    - 0.3
+  check_robot_home_collision: true

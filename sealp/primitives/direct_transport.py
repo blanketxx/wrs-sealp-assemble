@@ -2,7 +2,7 @@
 Single-Arm Direct Transport Primitive
 =====================================
 
-``pick -> transport -> place`` with one arm and one grasp, connected by RRT in joint space
+``pick -> +Z lift -> transport -> place`` with one arm and one grasp, connected by RRT in joint space
 instead of by mandatory Cartesian straight-line approach/depart segments::
 
     common grasp -> q_pick (IK) -> RRT to q_pick -> close -> held-object RRT to q_place
@@ -74,7 +74,9 @@ import wrs.motion.probabilistic.rrt_connect as rrtc
 
 from .base import MotionPrimitive, PrimitiveResult
 from .seating_collision import (
+    contact_flags_form_tail,
     gripper_mesh_collides,
+    held_object_mesh_collides,
     seating_waypoint_valid,
     to_triangle_cdmesh,
 )
@@ -167,6 +169,96 @@ def _mesh_local_bounds(obj_cmodel):
     if vertices.ndim != 2 or vertices.shape[1] != 3 or len(vertices) < 4:
         return None
     return vertices.min(axis=0), vertices.max(axis=0)
+
+
+def _obstacle_label(obj, index=None) -> str:
+    """Human-readable obstacle label for diagnostic output.
+
+    SEALP's executor annotates staging/goal collision models with
+    ``_sealp_part_id`` and ``_sealp_role``.  Those identifiers must take
+    precedence over WRS' generic model names such as ``sgm`` or
+    ``collision_model``; otherwise every different assembly part looks the
+    same in the log.
+    """
+    try:
+        pid = getattr(obj, "_sealp_part_id", None)
+    except Exception:
+        pid = None
+    try:
+        role = getattr(obj, "_sealp_role", None)
+    except Exception:
+        role = None
+    if pid is not None and str(pid).strip():
+        pid_s = str(pid).strip()
+        # Keep the main label compact.  The part id is what matters for the
+        # collision diagnosis; role is only appended when it adds information.
+        if role is not None and str(role).strip() and str(role) not in (
+                "assembled_at_goal", "staging_on_table"):
+            return f"{pid_s}({str(role).strip()})"
+        return pid_s
+
+    # Generic WRS names are not useful identifiers.  Fall through to a stable
+    # env/obstacle index instead of printing hundreds of 'sgm' entries.
+    generic_names = {"sgm", "collision_model", "cm", "model", "none", "unnamed"}
+    for attr in ("name", "objname", "model_name", "_name"):
+        try:
+            value = getattr(obj, attr, None)
+        except Exception:
+            value = None
+        if value is not None:
+            name = str(value).strip()
+            if name and name.lower() not in generic_names:
+                return name
+
+    try:
+        p = np.asarray(obj.pos, dtype=float).reshape(3)
+        suffix = f"@[{p[0]:.3f},{p[1]:.3f},{p[2]:.3f}]"
+    except Exception:
+        suffix = ""
+    prefix = f"env/obs#{index}" if index is not None else obj.__class__.__name__
+    return prefix + suffix
+
+
+
+
+def _is_work_table_obstacle(obj, index=None) -> bool:
+    """Project-specific work-table detector used for cap_plate exemption.
+
+    Prefer explicit SEALP ids/names.  The current CrossRailFrame executor's
+    legacy solid work_table is otherwise an unlabeled env obstacle at
+    approximately [0.234, 0.000, -0.010].
+    """
+    tokens = []
+    for attr in ("_sealp_part_id", "_sealp_role", "name", "objname", "model_name", "_name"):
+        try:
+            value = getattr(obj, attr, None)
+        except Exception:
+            value = None
+        if value is not None:
+            tokens.append(str(value).strip().lower())
+    joined = " ".join(tokens)
+    if "work_table" in joined or "worktable" in joined:
+        return True
+    # Avoid classifying assembled parts whose ids happen to contain 'table'.
+    if any(tok in {"table", "desk", "workbench"} for tok in tokens):
+        return True
+
+    # Fallback for the exact static table used by this project/log.
+    try:
+        p = np.asarray(obj.pos, dtype=float).reshape(3)
+        if np.linalg.norm(p - np.array([0.234, 0.0, -0.010])) <= 0.015:
+            pid = getattr(obj, "_sealp_part_id", None)
+            if pid is None or not str(pid).strip():
+                return True
+    except Exception:
+        pass
+
+    # Last-resort fallback: in this executor the table is env/obs#0.
+    try:
+        pid = getattr(obj, "_sealp_part_id", None)
+    except Exception:
+        pid = None
+    return index == 0 and (pid is None or not str(pid).strip())
 
 
 def _local_mesh_points(obj_cmodel, max_points: int = DEFAULT_SYMMETRY_MAX_POINTS):
@@ -379,6 +471,47 @@ def _summarise(reasons: Sequence[str]) -> str:
     return "; ".join(f"{n}x {key}" for key, n in ordered)
 
 
+
+def _cmodel_world_z_bounds(cmodel):
+    """Return (min_z, max_z) of a CollisionModel mesh in WORLD coordinates."""
+    try:
+        mesh = _mesh_from_cmodel(cmodel)
+        if mesh is None:
+            return None
+        verts = np.asarray(mesh.vertices, dtype=float)
+        pos = np.asarray(cmodel.pos, dtype=float).reshape(3)
+        rot = np.asarray(cmodel.rotmat, dtype=float).reshape(3, 3)
+        wz = (verts @ rot.T + pos)[:, 2]
+        if len(wz) == 0:
+            return None
+        return float(np.min(wz)), float(np.max(wz))
+    except Exception:
+        return None
+
+
+def _eef_world_z_bounds(robot):
+    """Return true end-effector collision-mesh z bounds in WORLD coordinates."""
+    ee = getattr(robot, "end_effector", None)
+    if ee is None:
+        delegator = getattr(robot, "delegator", None)
+        ee = getattr(delegator, "end_effector", None) if delegator is not None else None
+    if ee is None:
+        return None
+
+    zmins, zmaxs = [], []
+    for el in getattr(ee, "cdelements", []) or []:
+        cmodel = getattr(el, "cmodel", None)
+        if cmodel is None:
+            continue
+        bounds = _cmodel_world_z_bounds(cmodel)
+        if bounds is not None:
+            zmins.append(bounds[0])
+            zmaxs.append(bounds[1])
+    if not zmins:
+        return None
+    return min(zmins), max(zmaxs)
+
+
 class DirectTransportPrimitive(MotionPrimitive):
     """Single-arm pick/transport/place without mandatory Cartesian approach or depart.
 
@@ -400,13 +533,15 @@ class DirectTransportPrimitive(MotionPrimitive):
                  rrt_max_time: float = 100.0,
                  max_grasps: int = 24,
                  standoff_schedule: Sequence[float] = DEFAULT_STANDOFF_SCHEDULE,
-                 interp_granularity: float = 0.02):
+                 interp_granularity: float = 0.02,
+                 cartesian_granularity: float = 0.005):
         self.robot = robot
         self.rrt_ext_dist = float(rrt_ext_dist)
         self.rrt_max_time = float(rrt_max_time)
         self.max_grasps = int(max_grasps)
         self.standoff_schedule = tuple(standoff_schedule)
         self.interp_granularity = float(interp_granularity)
+        self.cartesian_granularity = max(1.0e-4, float(cartesian_granularity))
         self.last_certification = ""
         self._rrtc = rrtc.RRTConnect(robot)
         self._interp = mpi.InterplatedMotion(robot)
@@ -446,9 +581,9 @@ class DirectTransportPrimitive(MotionPrimitive):
             Where to put the stand-off before the grasp. Defaults to straight back out of the
             gripper, which is what clears a side grasp.
 
-        ``approach_distance``/``depart_distance`` are accepted for interface compatibility with
-        :class:`TransportPrimitive` and ignored: there is no Cartesian segment to parameterise, only
-        a stand-off point chosen from ``standoff_schedule``.
+        ``approach_distance``/``depart_distance`` remain interface-compatibility arguments.  The actual
+        staging lift is controlled by ``pick_depart_direction`` and ``pick_depart_distance``; the
+        asmdef insertion/depart axis is used only on the placement side.
         """
         if obstacle_list is None:
             obstacle_list = []
@@ -462,6 +597,40 @@ class DirectTransportPrimitive(MotionPrimitive):
         strict_obs = list(obstacle_list)
         grasp_obs = kwargs.get("grasp_obstacle_list")
         relaxed_obs = list(grasp_obs) if grasp_obs is not None else list(strict_obs)
+
+        # CrossRailFrame cap_plate special case: ignore the work table completely.
+        # All assembly-part collisions (rails/posts/base plate) remain active.
+        current_pid = kwargs.get("part_id") or kwargs.get("pid")
+        if current_pid is None:
+            try:
+                current_pid = getattr(obj_cmodel, "_sealp_part_id", None)
+            except Exception:
+                current_pid = None
+        if current_pid is None:
+            for attr in ("name", "objname", "model_name", "_name"):
+                try:
+                    value = getattr(obj_cmodel, attr, None)
+                except Exception:
+                    value = None
+                if value is not None and "cap_plate" in str(value).lower():
+                    current_pid = "cap_plate"
+                    break
+
+        ignore_work_table = bool(kwargs.get("ignore_work_table", False)) or str(current_pid) == "cap_plate"
+        if ignore_work_table:
+            strict_before = len(strict_obs)
+            relaxed_before = len(relaxed_obs)
+            strict_obs = [obs for i, obs in enumerate(strict_obs)
+                          if not _is_work_table_obstacle(obs, i)]
+            relaxed_obs = [obs for i, obs in enumerate(relaxed_obs)
+                           if not _is_work_table_obstacle(obs, i)]
+            print(
+                f"  [TABLE EXEMPT] pid={current_pid or 'cap_plate'}: work_table ignored "
+                f"for DirectTransport collision checks "
+                f"(strict {strict_before}->{len(strict_obs)}, "
+                f"relaxed {relaxed_before}->{len(relaxed_obs)})."
+            )
+
         mating_mesh_obs = list(kwargs.get("seating_mesh_obstacles") or [])
         phased_seating = bool(mating_mesh_obs)
         # Stand-off directions. At the goal it is the assembly's mating axis, so the object enters
@@ -472,6 +641,13 @@ class DirectTransportPrimitive(MotionPrimitive):
         depart_dirs = kwargs.get("place_depart_direction_list") or [None]
         place_standoff_dir = depart_dirs[-1]
         pick_standoff_dir = kwargs.get("pick_standoff_direction")
+
+        # Staging pick-depart is independent of the asmdef insertion axis.
+        # Every part is lifted in WORLD +Z before the long transport/RRT phase.
+        pick_depart_dir = np.asarray(
+            kwargs.get("pick_depart_direction", [0.0, 0.0, 1.0]), dtype=float
+        )
+        pick_depart_distance = float(kwargs.get("pick_depart_distance", 0.03))
 
         start_pose = (np.asarray(obj_cmodel.pos, dtype=float).copy(),
                       np.asarray(obj_cmodel.rotmat, dtype=float).copy())
@@ -550,6 +726,8 @@ class DirectTransportPrimitive(MotionPrimitive):
                     phased_seating=phased_seating,
                     pick_standoff_dir=pick_standoff_dir,
                     place_standoff_dir=place_standoff_dir,
+                    pick_depart_dir=pick_depart_dir,
+                    pick_depart_distance=pick_depart_distance,
                 )
             except Exception as e:  # a bad grasp must not abort the whole search
                 mot_data, err = None, f"gid={cand.gid} exception {type(e).__name__}: {e!r}"
@@ -660,6 +838,9 @@ class DirectTransportPrimitive(MotionPrimitive):
         out: List[_GraspCandidate] = []
         pick_fail: List[str] = []
         place_fail: List[str] = []
+        # Diagnostic rows for grasps that are staging-feasible and IK-reachable at the
+        # identity goal, but are rejected only by collision.
+        identity_collision_rows = []
         equivalent_goals = [(_compose_pose_with_local_transform(goal_pose, sym), sym)
                             for sym in symmetries]
 
@@ -683,6 +864,20 @@ class DirectTransportPrimitive(MotionPrimitive):
                         mesh_obstacle_list=mating_mesh_obs)
                 if q_place is None:
                     place_fail.append(f"{sym.label}: {why}")
+                    if sym.label == "identity" and why in (
+                            "arm collided", "gripper collided",
+                            "gripper mesh inside a mating partner"):
+                        try:
+                            jaw_mm = float(np.asarray(grasp.ee_values).reshape(-1)[0]) * 1000.0
+                        except Exception:
+                            try:
+                                jaw_mm = float(grasp.ee_values) * 1000.0
+                            except Exception:
+                                jaw_mm = float("nan")
+                        sources = self._collision_sources_at_pose(
+                            eq_goal, grasp, relaxed_obs, seed=q_pick,
+                            mesh_obstacle_list=mating_mesh_obs)
+                        identity_collision_rows.append((gid, jaw_mm, why, sources))
                     continue
 
                 out.append(_GraspCandidate(
@@ -706,6 +901,107 @@ class DirectTransportPrimitive(MotionPrimitive):
             f"goal rejects {_summarise(place_fail)}"
         )
         print(f"  [direct] grasp certification: {self.last_certification}")
+
+        if identity_collision_rows:
+            from collections import Counter
+            width_counter = Counter(round(row[1], 1) for row in identity_collision_rows)
+            source_counter = Counter()
+            for _, _, _, sources in identity_collision_rows:
+                for source in sources:
+                    source_counter[source] += 1
+
+            print("  [direct/goal-collision-diagnosis] identity goal has IK but is rejected by collision:")
+            print(f"    total={len(identity_collision_rows)}")
+            print("    jaw-width counts: " + ", ".join(
+                f"{w:.1f}mm={n}" for w, n in sorted(width_counter.items())))
+            if source_counter:
+                print("    collision-source counts:")
+                for source, n in source_counter.most_common():
+                    print(f"      {source}: {n}")
+
+            # The 32 mm jaw group is the important one for cap_plate: in the
+            # current grasp cache it corresponds to grasps spanning the 12 mm
+            # plate thickness.  Print its blocker distribution separately.
+            thin32_rows = [row for row in identity_collision_rows
+                           if abs(float(row[1]) - 32.0) <= 0.2]
+            if thin32_rows:
+                thin32_sources = Counter()
+                for _, _, _, sources in thin32_rows:
+                    # Count a blocker at most once per grasp.
+                    for source in set(sources):
+                        thin32_sources[source] += 1
+                print(f"    32mm thin-edge goal-collision grasps: {len(thin32_rows)}")
+                if thin32_sources:
+                    print("    32mm blocker counts:")
+                    for source, n in thin32_sources.most_common():
+                        print(f"      {source}: {n}")
+
+                # Geometry check: distinguish a REAL table hit from a collision-model artefact.
+                # The gripper TCP pose is fixed by the grasp, independent of which IK branch is used.
+                table_tops = []
+                for obs in relaxed_obs:
+                    label = _obstacle_label(obs)
+                    if str(label).startswith("env/") or "work_table" in str(label).lower():
+                        zb = _cmodel_world_z_bounds(obs)
+                        if zb is not None:
+                            table_tops.append(zb[1])
+                table_top_z = max(table_tops) if table_tops else 0.0
+
+                clearances = []
+                below_count = 0
+                geom_rows = []
+                ee = self._ee()
+                if ee is not None and hasattr(ee, "grip_at_by_pose"):
+                    for gid, jaw_mm, _, _sources in thin32_rows:
+                        grasp = grasp_collection[gid]
+                        tcp_pos, tcp_rotmat = _tcp_world_pose(goal_pose, grasp)
+                        self.robot.backup_state()
+                        try:
+                            ee.grip_at_by_pose(
+                                jaw_center_pos=np.asarray(tcp_pos, dtype=float),
+                                jaw_center_rotmat=np.asarray(tcp_rotmat, dtype=float),
+                                jaw_width=grasp.ee_values,
+                            )
+                            zb = _eef_world_z_bounds(self.robot)
+                        except Exception:
+                            zb = None
+                        finally:
+                            self.robot.restore_state()
+
+                        if zb is None:
+                            continue
+                        clearance = float(zb[0] - table_top_z)
+                        clearances.append(clearance)
+                        if clearance < -1e-6:
+                            below_count += 1
+                        geom_rows.append((gid, float(tcp_pos[2]), zb[0], zb[1], clearance))
+
+                if clearances:
+                    c = np.asarray(clearances, dtype=float)
+                    print("    32mm table-geometry check:")
+                    print(
+                        f"      table_top_z={table_top_z:.4f}m; "
+                        f"gripper_mesh_clearance min/median/max="
+                        f"{np.min(c)*1000.0:.1f}/"
+                        f"{np.median(c)*1000.0:.1f}/"
+                        f"{np.max(c)*1000.0:.1f}mm"
+                    )
+                    print(
+                        f"      true mesh below table top: "
+                        f"{below_count}/{len(clearances)} grasps"
+                    )
+                    for gid, tcp_z, gmin, gmax, clearance in geom_rows[:20]:
+                        print(
+                            f"      gid={gid:4d} tcp_z={tcp_z:.4f} "
+                            f"gripper_z=[{gmin:.4f},{gmax:.4f}] "
+                            f"clearance={clearance*1000.0:+.1f}mm"
+                        )
+
+            print("    per-grasp rows:")
+            for gid, jaw_mm, why, sources in identity_collision_rows:
+                source_text = ", ".join(sources)
+                print(f"      gid={gid:4d} jaw={jaw_mm:5.1f}mm reason={why}; colliders=[{source_text}]")
+
         out.sort(key=lambda c: float(np.max(np.abs(c.q_place - c.q_pick))))
         return out
 
@@ -732,15 +1028,80 @@ class DirectTransportPrimitive(MotionPrimitive):
         """Backward-compatible wrapper; all actual checks are world-frame TCP checks."""
         return self._ik_at_detail_pose((pos, rotmat), grasp, obstacle_list, seed, mesh_obstacle_list)
 
+    def _collision_sources_at_pose(self, obj_pose, grasp, obstacle_list, seed=None, mesh_obstacle_list=None):
+        """Re-evaluate one grasp pose and identify which obstacle(s) cause collision.
+
+        Diagnostic only. Robot state is restored before returning so this probe cannot change
+        subsequent IK/RRT behaviour.
+        """
+        self.robot.backup_state()
+        try:
+            tcp_pos, tcp_rotmat = _tcp_world_pose(obj_pose, grasp)
+            q = self.robot.ik(tgt_pos=tcp_pos, tgt_rotmat=tcp_rotmat, seed_jnt_values=seed)
+            if q is None:
+                q = self.robot.ik(tgt_pos=tcp_pos, tgt_rotmat=tcp_rotmat, seed_jnt_values=None)
+            if q is None:
+                return ["no-ik-during-diagnostic"]
+            if not self._within_limits(q):
+                return ["out-of-joint-limits-during-diagnostic"]
+
+            self._goto(q, ee_values=grasp.ee_values)
+            sources = []
+
+            try:
+                if self.robot.is_collided(obstacle_list=[]):
+                    sources.append("robot-self")
+            except Exception:
+                pass
+
+            for i, obs in enumerate(obstacle_list or []):
+                label = _obstacle_label(obs, i)
+                try:
+                    if self.robot.is_collided(obstacle_list=[obs]):
+                        sources.append(f"arm:{label}")
+                except Exception:
+                    pass
+                try:
+                    if self.robot.end_effector.is_mesh_collided(cmodel_list=[obs]):
+                        sources.append(f"gripper:{label}")
+                except Exception:
+                    pass
+
+            for i, obs in enumerate(mesh_obstacle_list or []):
+                label = _obstacle_label(obs, i)
+                try:
+                    if gripper_mesh_collides(self.robot, [obs]):
+                        tag = f"gripper-mesh:{label}"
+                        if tag not in sources:
+                            sources.append(tag)
+                except Exception:
+                    pass
+
+            if not sources:
+                try:
+                    if self.robot.is_collided(obstacle_list=obstacle_list):
+                        sources.append("scene-collision:pair-unavailable")
+                except Exception:
+                    pass
+                try:
+                    if self.robot.end_effector.is_mesh_collided(cmodel_list=obstacle_list):
+                        sources.append("gripper-collision:pair-unavailable")
+                except Exception:
+                    pass
+            return sources or ["collision-source-not-reproduced"]
+        finally:
+            self.robot.restore_state()
+
     # ------------------------------------------------------------------
     def _plan_with_grasp(self, cand, obj_cmodel, obj_at_start,
                          start_jnt_values, end_jnt_values, strict_obs, relaxed_obs,
                          mating_mesh_obs, phased_seating,
-                         pick_standoff_dir, place_standoff_dir):
+                         pick_standoff_dir, place_standoff_dir,
+                         pick_depart_dir, pick_depart_distance):
         """Plan one grasp end to end. Returns ``(MotionData, "")`` or ``(None, reason)``.
 
         Each of the three phases is built as *free RRT up to a stand-off configuration* plus *a
-        short joint-space interpolation across the contact*. The stand-off configuration comes from
+        short Cartesian TCP segment across the contact*. The stand-off configuration comes from
         a single IK call at a displaced pose, seeded from the certified configuration, and the
         interpolation needs no IK at all. That is what replaces the Cartesian segment: the long
         part of the motion stays under the strict obstacle set.  When ``phased_seating`` is active,
@@ -768,9 +1129,15 @@ class DirectTransportPrimitive(MotionPrimitive):
         if reach is None:
             return None, f"{cand.key} no rrt path to the pre-grasp stand-off"
         # closing in on the object: it is excluded here because the gripper has to enclose it
-        close_in = self._interpolate(q_pre_pick, cand.q_pick, strict_obs, ee_values=jaw_open)
+        close_in, close_err = self._cartesian_between_given_conf(
+            q_pre_pick,
+            cand.q_pick,
+            strict_obs,
+            ee_values=jaw_open,
+            segment_name="pre-grasp approach",
+        )
         if close_in is None:
-            return None, f"{cand.key} cannot close in on the object from the stand-off"
+            return None, f"{cand.key} cannot close in on the object from the stand-off: {close_err}"
         ok, n_contact = self._contact_is_tail(close_in, reach_obs, ee_values=jaw_open, want="tail")
         if not ok:
             return None, (f"{cand.key} closing in touches the object before the grasp "
@@ -786,7 +1153,25 @@ class DirectTransportPrimitive(MotionPrimitive):
         self._empty_hand()
         self.robot.hold(obj_cmodel=obj_held, jaw_width=cand.grasp.ee_values)
         try:
-            # Pick -> transport -> pre-place stand-off: mating partners are ordinary obstacles.
+            # 1) Mandatory pick-depart: once the grasp is closed, lift the part in WORLD +Z.
+            #    This is independent of the asmdef insertion axis, which is used only at placement.
+            lift, q_post_pick, lift_err = self._pick_lift(
+                start_pose=(sp, sr),
+                grasp=cand.grasp,
+                q_pick=cand.q_pick,
+                direction=pick_depart_dir,
+                distance=pick_depart_distance,
+                strict_obs=strict_obs,
+                ee_values=cand.grasp.ee_values,
+            )
+            if lift is None:
+                return None, f"{cand.key} pick-depart failed: {lift_err}"
+
+            # 2) Find the pre-place stand-off.  Prefer the strict box scene.  If the conservative
+            #    mating-part box blocks a geometrically valid stand-off, fall back to the relaxed
+            #    scene but then audit the RRT waypoint-by-waypoint against the true mating meshes.
+            transport_obs = strict_obs
+            transport_needs_mesh_audit = False
             q_pre_place, d_place, detail = self._standoff_conf(
                 (gp, gr), cand.grasp, place_dirs, strict_obs, seed=cand.q_place,
                 ee_values=cand.grasp.ee_values)
@@ -794,12 +1179,25 @@ class DirectTransportPrimitive(MotionPrimitive):
                 q_pre_place, d_place, detail = self._standoff_conf(
                     (gp, gr), cand.grasp, place_dirs, relaxed_obs, seed=cand.q_place,
                     ee_values=cand.grasp.ee_values, mesh_obstacle_list=mating_mesh_obs)
+                if q_pre_place is not None:
+                    transport_obs = relaxed_obs
+                    transport_needs_mesh_audit = True
             if q_pre_place is None:
                 return None, f"{cand.key} no stand-off above the goal ({detail})"
-            transport = self._rrt(cand.q_pick, q_pre_place, strict_obs,
-                                  ee_values=cand.grasp.ee_values)
+
+            # IMPORTANT: RRT starts from q_post_pick, never from the table-level q_pick.
+            transport = self._rrt(
+                q_post_pick, q_pre_place, transport_obs,
+                ee_values=cand.grasp.ee_values)
             if transport is None:
-                return None, f"{cand.key} no rrt path from q_pick to the pre-place stand-off"
+                return None, f"{cand.key} no rrt path from q_post_pick to the pre-place stand-off"
+
+            if transport_needs_mesh_audit:
+                ok, why = self._audit_mating_mesh_clear(
+                    transport, mating_mesh_obs, ee_values=cand.grasp.ee_values)
+                if not ok:
+                    return None, f"{cand.key} transport near mating partner: {why}"
+
             if phased_seating:
                 seat, seat_err = self._interpolate_seating(
                     q_pre_place, cand.q_place, relaxed_obs, mating_mesh_obs,
@@ -808,10 +1206,15 @@ class DirectTransportPrimitive(MotionPrimitive):
                     return None, f"{cand.key} {seat_err}"
             else:
                 # Legacy path: contact-exempt relaxed obstacles + tail audit.
-                seat = self._interpolate(q_pre_place, cand.q_place, relaxed_obs,
-                                         ee_values=cand.grasp.ee_values)
+                seat, seat_err = self._cartesian_between_given_conf(
+                    q_pre_place,
+                    cand.q_place,
+                    relaxed_obs,
+                    ee_values=cand.grasp.ee_values,
+                    segment_name="seating",
+                )
                 if seat is None:
-                    return None, f"{cand.key} cannot seat the object from the stand-off"
+                    return None, f"{cand.key} cannot seat the object from the stand-off: {seat_err}"
                 ok, n_contact = self._contact_is_tail(
                     seat, strict_obs, ee_values=cand.grasp.ee_values, want="tail")
                 if not ok:
@@ -840,10 +1243,16 @@ class DirectTransportPrimitive(MotionPrimitive):
                 break
         if q_post_place is None:
             return None, f"{cand.key} nowhere to retract to after releasing ({detail})"
-        back_off = self._interpolate(cand.q_place, q_post_place, relaxed_obs,
-                                     ee_values=jaw_release)
+        back_off, back_err = self._cartesian_between_given_conf(
+            cand.q_place,
+            q_post_place,
+            relaxed_obs,
+            ee_values=jaw_release,
+            mating_mesh_obs=mating_mesh_obs if phased_seating else None,
+            segment_name="place retract",
+        )
         if back_off is None:
-            return None, f"{cand.key} cannot back off from the placed object"
+            return None, f"{cand.key} cannot back off from the placed object: {back_err}"
         if phased_seating:
             ok, why = self._audit_gripper_mesh(back_off, mating_mesh_obs, ee_values=jaw_release)
             if not ok:
@@ -858,10 +1267,11 @@ class DirectTransportPrimitive(MotionPrimitive):
             return None, f"{cand.key} no rrt path from the stand-off back to the end configuration"
 
         print(f"  [direct] {cand.key} stand-off pick={d_pick * 1000:.0f}mm "
+              f"lift={pick_depart_distance * 1000:.0f}mm "
               f"place={d_place * 1000:.0f}mm, release opening={jaw_release * 1000:.1f}mm")
         return self._assemble(cand, obj_cmodel, obj_at_start, obj_at_goal,
                               reach_jv=list(reach.jv_list) + list(close_in.jv_list),
-                              carry_jv=list(transport.jv_list) + list(seat.jv_list),
+                              carry_jv=list(lift.jv_list) + list(transport.jv_list) + list(seat.jv_list),
                               retract_jv=list(back_off.jv_list) + list(home.jv_list),
                               jaw_open=jaw_open, jaw_release=jaw_release), ""
 
@@ -918,28 +1328,194 @@ class DirectTransportPrimitive(MotionPrimitive):
         return [w for i, w in enumerate(widths)
                 if w <= jaw_max + 1e-9 and w not in widths[:i]]
 
-    def _interpolate_seating(self, start_conf, goal_conf, arm_obs, mating_mesh_obs, ee_values):
-        """Stand-off -> goal, with mating partners checked by triangle mesh instead of by box.
+    def _pick_lift(self, start_pose, grasp, q_pick, direction, distance,
+                   strict_obs, ee_values):
+        """Lift the newly grasped part along a true WORLD Cartesian line."""
+        distance = max(0.0, float(distance))
+        q_pick = np.asarray(q_pick, dtype=float)
+        if distance <= 1e-9:
+            md = motd.MotionData(robot=self.robot)
+            md.extend(jv_list=[q_pick])
+            return md, q_pick.copy(), ""
 
-        Their boxes are absent from ``arm_obs`` (that is what makes a seated pose reachable at
-        all), so every waypoint additionally verifies that the gripper does not intersect a partner
-        and that the held part does not pass through one.  Only the last waypoint may touch.
-        """
-        interpolated = rm.interpolate_vectors(
-            start_vector=start_conf, end_vector=goal_conf, granularity=self.interp_granularity)
-        clipped = np.clip(interpolated, self.robot.jnt_ranges[:, 0], self.robot.jnt_ranges[:, 1])
+        unit = rm.unit_vector(np.asarray(direction, dtype=float))
+        tcp_pos, tcp_rotmat = _tcp_world_pose(start_pose, grasp)
+        goal_tcp_pos = tcp_pos + unit * distance
+
+        n = max(2, int(math.ceil(distance / self.cartesian_granularity)) + 1)
+        q_seed = q_pick.copy()
         jv_list = []
-        n = len(clipped)
-        for i, jnt_values in enumerate(clipped):
+        collision_flags = []
+
+        for i, t in enumerate(np.linspace(0.0, 1.0, n)):
+            if i == 0:
+                q = q_pick.copy()
+            else:
+                p = tcp_pos * (1.0 - t) + goal_tcp_pos * t
+                q = self.robot.ik(
+                    tgt_pos=p,
+                    tgt_rotmat=tcp_rotmat,
+                    seed_jnt_values=q_seed,
+                )
+                if q is None:
+                    return None, None, f"no IK during +Z lift at waypoint {i + 1}/{n}"
+                q = np.asarray(q, dtype=float)
+                if not self._within_limits(q):
+                    return None, None, f"joint limit during +Z lift at waypoint {i + 1}/{n}"
+
+            self._goto(q, ee_values=ee_values)
+
+            try:
+                if self.robot.end_effector.is_mesh_collided(cmodel_list=strict_obs):
+                    return None, None, (
+                        f"gripper collided during +Z lift at waypoint {i + 1}/{n}"
+                    )
+            except Exception:
+                pass
+
+            collision_flags.append(
+                bool(self.robot.is_collided(obstacle_list=strict_obs))
+            )
+            jv_list.append(q.copy())
+            q_seed = q
+
+        idx = [i for i, flag in enumerate(collision_flags) if flag]
+        if idx:
+            contiguous = (idx[-1] - idx[0] + 1) == len(idx)
+            if not contiguous or idx[0] != 0 or idx[-1] == len(collision_flags) - 1:
+                return None, None, (
+                    "pick lift collision is not a clearing head "
+                    f"(contact waypoints={[i + 1 for i in idx]}, total={n})"
+                )
+
+        md = motd.MotionData(robot=self.robot)
+        md.extend(jv_list=jv_list)
+        return md, np.asarray(jv_list[-1], dtype=float), ""
+
+    def _audit_mating_mesh_clear(self, mot_data, mating_mesh_obs, ee_values):
+        """Transport/RRT near a mating partner must remain physically mesh-clear.
+
+        This is used when the conservative mating-part box had to be removed to make a pre-place
+        stand-off admissible.  The RRT may ignore that box, but neither gripper nor held part may
+        intersect the actual partner mesh before the controlled seating segment begins.
+        """
+        if not mating_mesh_obs:
+            return True, ""
+        for i, jnt_values in enumerate(mot_data.jv_list):
             self._goto(jnt_values, ee_values=ee_values)
-            if self.robot.is_collided(obstacle_list=arm_obs):
-                return None, f"seating: arm collided at waypoint {i + 1}/{n}"
-            ok, why = seating_waypoint_valid(self.robot, mating_mesh_obs, is_final=(i == n - 1))
-            if not ok:
-                return None, f"seating: {why} at waypoint {i + 1}/{n}"
-            jv_list.append(jnt_values)
-        mot_data = motd.MotionData(robot=self.robot)
-        mot_data.extend(jv_list=jv_list)
+            if gripper_mesh_collides(self.robot, mating_mesh_obs):
+                return False, f"gripper mesh intersects mating partner at waypoint {i + 1}"
+            if held_object_mesh_collides(self.robot, mating_mesh_obs):
+                return False, f"held object reaches mating partner before seating at waypoint {i + 1}"
+        return True, ""
+
+    def _cartesian_between_given_conf(
+            self,
+            start_conf,
+            goal_conf,
+            obstacle_list,
+            ee_values,
+            *,
+            mating_mesh_obs=None,
+            track_held_object_contact=False,
+            segment_name="cartesian",
+            return_contact_flags=False):
+        """Connect two endpoint configurations with a straight TCP translation."""
+        start_conf = np.asarray(start_conf, dtype=float)
+        goal_conf = np.asarray(goal_conf, dtype=float)
+
+        start_pos, _ = self.robot.fk(jnt_values=start_conf)
+        goal_pos, goal_rot = self.robot.fk(jnt_values=goal_conf)
+        start_pos = np.asarray(start_pos, dtype=float)
+        goal_pos = np.asarray(goal_pos, dtype=float)
+        goal_rot = np.asarray(goal_rot, dtype=float)
+
+        distance = float(np.linalg.norm(goal_pos - start_pos))
+        n = max(2, int(math.ceil(distance / self.cartesian_granularity)) + 1)
+
+        q_seed = start_conf.copy()
+        jv_list = []
+        held_contact_flags = []
+
+        for i, t in enumerate(np.linspace(0.0, 1.0, n)):
+            if i == 0:
+                q = start_conf.copy()
+            elif i == n - 1:
+                q = goal_conf.copy()
+            else:
+                tcp_pos = start_pos * (1.0 - t) + goal_pos * t
+                q = self.robot.ik(
+                    tgt_pos=tcp_pos,
+                    tgt_rotmat=goal_rot,
+                    seed_jnt_values=q_seed,
+                )
+                if q is None:
+                    err = f"{segment_name}: IK failed at waypoint {i + 1}/{n}"
+                    if return_contact_flags:
+                        return None, err, held_contact_flags
+                    return None, err
+                q = np.asarray(q, dtype=float)
+                if not self._within_limits(q):
+                    err = f"{segment_name}: joint limit at waypoint {i + 1}/{n}"
+                    if return_contact_flags:
+                        return None, err, held_contact_flags
+                    return None, err
+
+            self._goto(q, ee_values=ee_values)
+
+            if self.robot.is_collided(obstacle_list=obstacle_list):
+                err = f"{segment_name}: arm/scene collision at waypoint {i + 1}/{n}"
+                if return_contact_flags:
+                    return None, err, held_contact_flags
+                return None, err
+
+            if mating_mesh_obs:
+                if gripper_mesh_collides(self.robot, mating_mesh_obs):
+                    err = (
+                        f"{segment_name}: gripper mesh intersects mating partner "
+                        f"at waypoint {i + 1}/{n}"
+                    )
+                    if return_contact_flags:
+                        return None, err, held_contact_flags
+                    return None, err
+
+                if track_held_object_contact:
+                    held_contact_flags.append(
+                        bool(held_object_mesh_collides(self.robot, mating_mesh_obs))
+                    )
+
+            jv_list.append(q.copy())
+            q_seed = q
+
+        md = motd.MotionData(robot=self.robot)
+        md.extend(jv_list=jv_list)
+        if return_contact_flags:
+            if len(held_contact_flags) < len(jv_list):
+                held_contact_flags.extend([False] * (len(jv_list) - len(held_contact_flags)))
+            return md, "", held_contact_flags
+        return md, ""
+
+    def _interpolate_seating(self, start_conf, goal_conf, arm_obs, mating_mesh_obs, ee_values):
+        """Stand-off -> goal on a true Cartesian TCP line."""
+        mot_data, err, contact_flags = self._cartesian_between_given_conf(
+            start_conf,
+            goal_conf,
+            arm_obs,
+            ee_values=ee_values,
+            mating_mesh_obs=mating_mesh_obs,
+            track_held_object_contact=True,
+            segment_name="seating",
+            return_contact_flags=True,
+        )
+        if mot_data is None:
+            return None, err
+
+        if not contact_flags_form_tail(contact_flags):
+            idx = [i + 1 for i, flag in enumerate(contact_flags) if flag]
+            return None, (
+                "seating: held-object/mating contact is not a contiguous tail "
+                f"(contact waypoints={idx}, total={len(contact_flags)})"
+            )
         return mot_data, ""
 
     def _audit_gripper_mesh(self, mot_data, mating_mesh_obs, ee_values):

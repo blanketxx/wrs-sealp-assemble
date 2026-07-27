@@ -3,26 +3,22 @@
 
 format_version: '1.0'
 name: SecondAssembly
-description: 'Assembly from sealp/assets/models/second: rectangular base with cylinder
-  / ao / tu seated on top along world -Z.'
+description: 'Assembly from sealp/assets/models/second: rectangular base, then ao
+  / tu, then cylinder last; all seat along world -Z.'
 models:
   rectangular_model:
     path: D:\Project\wrs-sealp\sealp\assets\models\second\rectangular.stl
-  cylinder_model:
-    path: D:\Project\wrs-sealp\sealp\assets\models\second\cylinder.stl
   ao_model:
     path: D:\Project\wrs-sealp\sealp\assets\models\second\ao.stl
   tu_model:
     path: D:\Project\wrs-sealp\sealp\assets\models\second\tu.stl
+  cylinder_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\second\cylinder.stl
 parts:
   rectangular:
     name: Rectangular
     model: rectangular_model
     mass: 0.1225
-  cylinder:
-    name: Cylinder
-    model: cylinder_model
-    mass: 0.125624
   ao:
     name: Ao
     model: ao_model
@@ -31,6 +27,10 @@ parts:
     name: Tu
     model: tu_model
     mass: 0.081
+  cylinder:
+    name: Cylinder
+    model: cylinder_model
+    mass: 0.125624
 assembly:
 - step: 0
   part: rectangular
@@ -56,36 +56,12 @@ assembly:
   - !!float '-1'
   notes: Seat rectangular along world -Z onto the fixture.
 - step: 1
-  part: cylinder
-  parent: rectangular
-  rel_pos:
-  - !!float '0'
-  - !!float '0'
-  - 0.025
-  rel_rotmat:
-  - - !!float '1'
-    - !!float '0'
-    - !!float '0'
-  - - !!float '0'
-    - !!float '1'
-    - !!float '0'
-  - - !!float '0'
-    - !!float '0'
-    - !!float '1'
-  deps:
-  - 0
-  insertion_axis:
-  - !!float '0'
-  - !!float '0'
-  - !!float '-1'
-  notes: Seat cylinder along world -Z onto rectangular.
-- step: 2
   part: ao
   parent: rectangular
   rel_pos:
+  - -0.035
   - !!float '0'
-  - !!float '0'
-  - 0.025
+  - 0.03
   rel_rotmat:
   - - !!float '1'
     - !!float '0'
@@ -103,13 +79,13 @@ assembly:
   - !!float '0'
   - !!float '-1'
   notes: Seat ao along world -Z onto rectangular.
-- step: 3
+- step: 2
   part: tu
   parent: rectangular
   rel_pos:
+  - 0.035
   - !!float '0'
-  - !!float '0'
-  - 0.025
+  - 0.03
   rel_rotmat:
   - - !!float '1'
     - !!float '0'
@@ -127,3 +103,27 @@ assembly:
   - !!float '0'
   - !!float '-1'
   notes: Seat tu along world -Z onto rectangular.
+- step: 3
+  part: cylinder
+  parent: rectangular
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.06
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 0
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Seat cylinder along world -Z onto rectangular.

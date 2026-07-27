@@ -1,114 +1,72 @@
 # SEALP Workspace Layout v1.0
-# p1l3_headline_forward_yawon_chair_4leg
+# p1l3_headline_forward_yawon_chair_4leg_scattered
 
 format_version: '1.0'
-name: p1l3_headline_forward_yawon_chair_4leg
+name: p1l3_headline_forward_yawon_chair_4leg_scattered
 robot_base:
   pos:
-  - !!float '0'
-  - !!float '0'
-  - !!float '0'
+  - 0.0
+  - 0.0
+  - 0.0
   rotmat:
-  - - !!float '1'
-    - !!float '0'
-    - !!float '0'
-  - - !!float '0'
-    - !!float '1'
-    - !!float '0'
-  - - !!float '0'
-    - !!float '0'
-    - !!float '1'
+  - [1, 0.0, 0.0]
+  - [0.0, 1, 0.0]
+  - [0.0, 0.0, 1]
 assembly_station:
   pos:
   - 0.373
-  - !!float '0'
-  - !!float '0'
+  - 0.0
+  - 0.0
   rotmat:
-  - - !!float '1'
-    - !!float '0'
-    - !!float '0'
-  - - !!float '0'
-    - !!float '1'
-    - !!float '0'
-  - - !!float '0'
-    - !!float '0'
-    - !!float '1'
+  - [1, 0.0, 0.0]
+  - [0.0, 1, 0.0]
+  - [0.0, 0.0, 1]
 staging:
   leg_bl:
     pos:
-    - 0.434
-    - 0.2005
+    - 0.425
+    - 0.185
     - 0.01
     rotmat:
-    - - !!float '1'
-      - !!float '0'
-      - !!float '0'
-    - - !!float '0'
-      - !!float '1'
-      - !!float '0'
-    - - !!float '0'
-      - !!float '0'
-      - !!float '1'
+    - [0.939692620786, -0.342020143326, 0.0]
+    - [0.342020143326, 0.939692620786, 0.0]
+    - [0.0, 0.0, 1]
   leg_br:
     pos:
-    - 0.434
-    - -0.2005
+    - 0.305
+    - -0.235
     - 0.01
     rotmat:
-    - - !!float '1'
-      - !!float '0'
-      - !!float '0'
-    - - !!float '0'
-      - !!float '1'
-      - !!float '0'
-    - - !!float '0'
-      - !!float '0'
-      - !!float '1'
+    - [-0.173648177667, -0.984807753012, 0.0]
+    - [0.984807753012, -0.173648177667, 0.0]
+    - [0.0, 0.0, 1]
   leg_fl:
     pos:
-    - 0.033
-    - 0.2005
+    - 0.055
+    - 0.105
     - 0.01
     rotmat:
-    - - !!float '1'
-      - !!float '0'
-      - !!float '0'
-    - - !!float '0'
-      - !!float '1'
-      - !!float '0'
-    - - !!float '0'
-      - !!float '0'
-      - !!float '1'
+    - [-0.766044443119, 0.642787609687, 0.0]
+    - [-0.642787609687, -0.766044443119, 0.0]
+    - [0.0, 0.0, 1]
   leg_fr:
     pos:
-    - 0.033
-    - -0.2005
+    - 0.155
+    - -0.165
     - 0.01
     rotmat:
-    - - !!float '1'
-      - !!float '0'
-      - !!float '0'
-    - - !!float '0'
-      - !!float '1'
-      - !!float '0'
-    - - !!float '0'
-      - !!float '0'
-      - !!float '1'
+    - [0.5, 0.866025403784, 0.0]
+    - [-0.866025403784, 0.5, 0.0]
+    - [0.0, 0.0, 1]
   seat:
     pos:
     - 0.373
-    - !!float '0'
-    - !!float '0'
+    - 0.0
+    - 0.0
     rotmat:
-    - - !!float '1'
-      - !!float '0'
-      - !!float '0'
-    - - !!float '0'
-      - !!float '1'
-      - !!float '0'
-    - - !!float '0'
-      - !!float '0'
-      - !!float '1'
+    - [1, 0.0, 0.0]
+    - [0.0, 1, 0.0]
+    - [0.0, 0.0, 1]
 metadata:
   part_order:
   - seat
@@ -128,5 +86,10 @@ metadata:
     leg_fl: fs_yaw
     leg_fr: fs_yaw
     seat: preassembled_at_assembly_region
-  l3_pass: true
-  source_json: sealp/examples/layout/experiments/_output/p1l3/p1l3_headline_forward_yawon_chair_4leg_seed0_20260725_185434.json
+  yaw_deg:
+    leg_bl: 20
+    leg_br: 100
+    leg_fl: 220
+    leg_fr: 300
+  l3_pass: false
+  source_json: manual_scattered_variant_from_p1l3_headline_forward_yawon_chair_4leg

@@ -1,0 +1,161 @@
+# SEALP Workspace Layout v1.0
+# paper2_second
+
+format_version: "1.0"
+name: "paper2_second"
+robot_base:
+  pos:
+    - 0.0
+    - 0.0
+    - 0.0
+  rotmat:
+    -
+      - 1.0
+      - 0.0
+      - 0.0
+    -
+      - 0.0
+      - 1.0
+      - 0.0
+    -
+      - 0.0
+      - 0.0
+      - 1.0
+assembly_station:
+  pos:
+    - 0.23349999999999999
+    - 0.0
+    - 0.0
+  rotmat:
+    -
+      - 1.0
+      - 0.0
+      - 0.0
+    -
+      - 0.0
+      - 1.0
+      - 0.0
+    -
+      - 0.0
+      - 0.0
+      - 1.0
+staging:
+  concave:
+    pos:
+      - 0.23349999999999999
+      - 0.0
+      - 0.0
+    rotmat:
+      -
+        - 1.0
+        - 0.0
+        - 0.0
+      -
+        - 0.0
+        - 1.0
+        - 0.0
+      -
+        - 0.0
+        - 0.0
+        - 1.0
+  convex:
+    pos:
+      - 0.1298626037015647
+      - -0.14169646872771408
+      - 0.0
+    rotmat:
+      -
+        - -0.13567873025042082
+        - 0.990752886525007
+        - 0.0
+      -
+        - -0.990752886525007
+        - -0.13567873025042082
+        - 0.0
+      -
+        - 0.0
+        - 0.0
+        - 1.0
+  rectangular_prism:
+    pos:
+      - 0.009411667432914984
+      - -0.11623660997591363
+      - 0.0
+    rotmat:
+      -
+        - -0.0018183411112800958
+        - 0.999998346816435
+        - 0.0
+      -
+        - -0.999998346816435
+        - -0.0018183411112800958
+        - 0.0
+      -
+        - 0.0
+        - 0.0
+        - 1.0
+  cylinder:
+    pos:
+      - 0.2071674151798999
+      - 0.11343022652706165
+      - 0.0
+    rotmat:
+      -
+        - 0.9121243776902528
+        - -0.4099135514022062
+        - 0.0
+      -
+        - 0.4099135514022062
+        - 0.9121243776902528
+        - 0.0
+      -
+        - 0.0
+        - 0.0
+        - 1.0
+metadata:
+  search_method: "CASE25_0235 paper pipeline"
+  score: 0.05152983862127107
+  score_components:
+    grasp: 0.08444444444444445
+    manip: 0.0009079044000000031
+  part_order:
+    - "concave"
+    - "convex"
+    - "rectangular_prism"
+    - "cylinder"
+  assembly_station_pos:
+    - 0.23349999999999999
+    - 0.0
+    - 0.0
+  preassemble_first_part: true
+  grasp_counts:
+    convex: 2
+    rectangular_prism: 9
+    cylinder: 65
+  z_offsets:
+    concave: 0.0
+    convex: 0.0
+    rectangular_prism: 0.0
+    cylinder: 0.0
+  per_part_dist:
+    concave: 0.0
+    convex: 0.2241156724622442
+    rectangular_prism: 0.2855480932716678
+    cylinder: 0.1401895226138362
+  per_part_manip:
+    concave: 0.0
+    convex: 0.0009079044000000031
+    rectangular_prism: 0.0009079044000000031
+    cylinder: 0.0009079044000000031
+  per_part_rot_angle:
+    concave: 0.0
+    convex: 1.706894822308277
+    rectangular_prism: 1.5726146689081946
+    cylinder: 0.42235928296455183
+  table_top_z: 0.0
+  table_x_range:
+    - -0.0665
+    - 0.5335
+  table_y_range:
+    - -0.3
+    - 0.3
