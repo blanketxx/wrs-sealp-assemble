@@ -164,8 +164,8 @@ DEFAULT_ASSEMBLY_ARM_Y_CLEARANCE = 0.22
 # 判断方式是“零件 footprint AABB 与 arm keepout rectangle 是否重叠”。
 # 这样避免“先乱采样，再被 robot_home_collision 大量杀掉”，提高有效采样率。
 DEFAULT_FILTER_STAGING_NEAR_ARMS = True
-DEFAULT_STAGING_ARM_X_CLEARANCE = 0.05
-DEFAULT_STAGING_ARM_Y_CLEARANCE = 0.05
+DEFAULT_STAGING_ARM_X_CLEARANCE = 0.12
+DEFAULT_STAGING_ARM_Y_CLEARANCE = 0.12
 
 # 根据最终装配位置的 y 左/右关系，对 staging 初始位置做半桌面优先采样。
 # y 更大 = 更偏左 -> 优先采样桌子左半边；
@@ -2823,8 +2823,16 @@ class WeightedInitialLayoutSearcher:
 
             placed.add(pid)
 
-        # 最终复检所有 staging 都不在左右臂附近禁区内
-        for _pid in self.part_order:
+        # 最终复检真正从 staging 抓取的零件都不在左右臂附近禁区内。
+        #
+        # preassembled 第一件不属于 staging pick part。它的位置由 assembly_station
+        # 决定，并且已经在 _assembly_region_reject_reason() 中做过
+        # “实体 vs arm collision boxes”的严格碰撞检查。
+        # 再对它施加 staging rectangular keepout 会误杀合法装配中心。
+        #
+        # _active_pick_part_order() 会自动排除 preassembled 第一件，
+        # 因而这里对任意装配体都成立，不写死 base_plate。
+        for _pid in self._active_pick_part_order():
             if _pid in self.rot_cands and _pid in layout.xy and _pid in layout.pose_tag:
                 # 使用最终提交的旋转姿态重新构造一个临时候选 footprint
                 # 优先从 rot_name 找到对应 cand
@@ -3774,7 +3782,7 @@ def main():
         output_dir = os.path.join(SEALP_ROOT, "examples", "layout", "_output")
 
     print("=" * 70)
-    print("Tower Initial Layout Search [v9.5 NoL2DepartApproach + GoalYSideSampling]")
+    print("Tower Initial Layout Search [v9.6 PreassembledKeepoutFix + GoalYSideSampling]")
     print(f"asmdef    = {args.asmdef}")
     print(f"config    = {args.config}")
     print(f"grasp_dir = {args.grasp_dir}")

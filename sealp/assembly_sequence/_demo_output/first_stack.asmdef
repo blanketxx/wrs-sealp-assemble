@@ -1,0 +1,129 @@
+# SEALP Assembly Definition v1.0
+# FirstStack
+
+format_version: '1.0'
+name: FirstStack
+description: Four centered plates from sealp/assets/models/first, stacked along world
+  -Z (center-aligned XY).
+models:
+  part_10_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\first\part_10.stl
+  part_8_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\first\part_8.stl
+  part_6_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\first\part_6.stl
+  part_4_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\first\part_4.stl
+parts:
+  part_10:
+    name: Part 10
+    model: part_10_model
+    mass: 0.3
+  part_8:
+    name: Part 8
+    model: part_8_model
+    mass: 0.192
+  part_6:
+    name: Part 6
+    model: part_6_model
+    mass: 0.108
+  part_4:
+    name: Part 4
+    model: part_4_model
+    mass: 0.048
+assembly:
+- step: 0
+  part: part_10
+  parent: fixture
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - !!float '0'
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps: []
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Seat part_10 by translating along world -Z onto the fixture; XY centers coincide.
+- step: 1
+  part: part_8
+  parent: part_10
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.03
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 0
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Seat part_8 by translating along world -Z onto part_10; XY centers coincide.
+- step: 2
+  part: part_6
+  parent: part_8
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.03
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 1
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Seat part_6 by translating along world -Z onto part_8; XY centers coincide.
+- step: 3
+  part: part_4
+  parent: part_6
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.03
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 2
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Seat part_4 by translating along world -Z onto part_6; XY centers coincide.

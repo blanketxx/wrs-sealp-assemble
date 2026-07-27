@@ -1,0 +1,129 @@
+# SEALP Assembly Definition v1.0
+# SecondAssembly
+
+format_version: '1.0'
+name: SecondAssembly
+description: 'Assembly from sealp/assets/models/second: rectangular base with cylinder
+  / ao / tu seated on top along world -Z.'
+models:
+  rectangular_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\second\rectangular.stl
+  cylinder_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\second\cylinder.stl
+  ao_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\second\ao.stl
+  tu_model:
+    path: D:\Project\wrs-sealp\sealp\assets\models\second\tu.stl
+parts:
+  rectangular:
+    name: Rectangular
+    model: rectangular_model
+    mass: 0.1225
+  cylinder:
+    name: Cylinder
+    model: cylinder_model
+    mass: 0.125624
+  ao:
+    name: Ao
+    model: ao_model
+    mass: 0.066
+  tu:
+    name: Tu
+    model: tu_model
+    mass: 0.081
+assembly:
+- step: 0
+  part: rectangular
+  parent: fixture
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - !!float '0'
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps: []
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Seat rectangular along world -Z onto the fixture.
+- step: 1
+  part: cylinder
+  parent: rectangular
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.025
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 0
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Seat cylinder along world -Z onto rectangular.
+- step: 2
+  part: ao
+  parent: rectangular
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.025
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 0
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Seat ao along world -Z onto rectangular.
+- step: 3
+  part: tu
+  parent: rectangular
+  rel_pos:
+  - !!float '0'
+  - !!float '0'
+  - 0.025
+  rel_rotmat:
+  - - !!float '1'
+    - !!float '0'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '1'
+    - !!float '0'
+  - - !!float '0'
+    - !!float '0'
+    - !!float '1'
+  deps:
+  - 0
+  insertion_axis:
+  - !!float '0'
+  - !!float '0'
+  - !!float '-1'
+  notes: Seat tu along world -Z onto rectangular.

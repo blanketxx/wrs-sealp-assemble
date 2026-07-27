@@ -1,0 +1,279 @@
+# SEALP Workspace Layout v1.0
+# Converted from bsfs_crf_backward_seed0.json
+
+format_version: '1.0'
+name: bsfs_crf_backward_seed0
+robot_base:
+  pos:
+  - 0.0
+  - 0.0
+  - 0.0
+  rotmat:
+  - - 1.0
+    - 0.0
+    - 0.0
+  - - 0.0
+    - 1.0
+    - 0.0
+  - - 0.0
+    - 0.0
+    - 1.0
+assembly_station:
+  pos:
+  - 0.116833331744
+  - 0.12666666617
+  - 0.0
+  rotmat:
+  - - 1.0
+    - 0.0
+    - 0.0
+  - - 0.0
+    - 1.0
+    - 0.0
+  - - 0.0
+    - 0.0
+    - 1.0
+staging:
+  base_plate:
+    pos:
+    - 0.116833331744
+    - 0.12666666617
+    - 0.0
+    rotmat:
+    - - 1.0
+      - 0.0
+      - 0.0
+    - - 0.0
+      - 1.0
+      - 0.0
+    - - 0.0
+      - 0.0
+      - 1.0
+  post_l:
+    pos:
+    - 0.0284999996647
+    - 0.205000000335
+    - 0.0254806608351
+    rotmat: &id001
+    - - 0.803809959225
+      - 0.0297071928393
+      - -0.594143949009
+    - - 0.594886165119
+      - -0.0401403476244
+      - 0.8028070771
+    - - 0.0
+      - -0.998752339264
+      - -0.0499376092119
+  post_r:
+    pos:
+    - 0.274500000067
+    - -0.0410000000671
+    - 0.0254806608351
+    rotmat:
+    - - -0.0479153202438
+      - 0.281696062037
+      - -0.958306553624
+    - - 0.0140672278625
+      - 0.959503688702
+      - 0.281344600921
+    - - 0.998752339264
+      - 0.0
+      - -0.0499376092119
+  rail_l:
+    pos:
+    - 0.44549999962
+    - -0.21199999962
+    - 0.02600000076
+    rotmat: &id002
+    - - -0.819152044289
+      - 0.573576436351
+      - 0.0
+    - - 0.573576436351
+      - 0.819152044289
+      - 0.0
+    - - 0.0
+      - 0.0
+      - -1.0
+  rail_r:
+    pos:
+    - 0.191100000076
+    - -0.21199999962
+    - 0.01800000038
+    rotmat:
+    - - -0.819152044289
+      - 0.0
+      - 0.573576436351
+    - - 0.573576436351
+      - 0.0
+      - 0.819152044289
+    - - 0.0
+      - 1.0
+      - 0.0
+  cap_plate:
+    pos:
+    - 0.447499999948
+    - 0.213999999948
+    - 0.0399999993294
+    rotmat:
+    - - -0.939692620786
+      - 0.0
+      - -0.342020143326
+    - - 0.342020143326
+      - 0.0
+      - -0.939692620786
+    - - 0.0
+      - -1.0
+      - 0.0
+metadata:
+  method: BSFS-beam
+  asmdef: sealp/assembly_sequence/_demo_output/cross_rail_frame_v1.asmdef
+  part_order:
+  - base_plate
+  - post_l
+  - post_r
+  - rail_l
+  - rail_r
+  - cap_plate
+  preassemble_first_part: true
+  preassembled_part: base_plate
+  picked_parts:
+  - cap_plate
+  - rail_r
+  - rail_l
+  - post_r
+  - post_l
+  arm_choice:
+    base_plate: preassembled
+    post_l: lft
+    post_r: lft
+    rail_l: lft
+    rail_r: lft
+    cap_plate: lft
+  pose_tag:
+    base_plate: preassembled_at_assembly_region
+    post_l: fs_yaw
+    post_r: fs_yaw
+    rail_l: fs_yaw
+    rail_r: fs_yaw
+    cap_plate: fs_yaw
+  rot_name:
+    post_l: fs_01_y080
+    post_r: fs_03_y120
+    rail_l: fs_02_y100
+    rail_r: fs_01_y100
+    cap_plate: rot90_08_y160
+  layout_score: 0.149054870254
+  objective_cost: 4.65103696705
+  total_cost: 4.65103696705
+  witness_status: L2_PASS
+  l2_pass: true
+  l3_pass: false
+  layout_fingerprint: C0.1168,0.1267|post_l:0.0285,0.2050:fs_01_y080|post_r:0.2745,-0.0410:fs_03_y120|rail_l:0.4455,-0.2120:fs_02_y100|rail_r:0.1911,-0.2120:fs_01_y100|cap_plate:0.4475,0.2140:rot90_08_y160|beam|0.08|6|1|4|0.1|0.005|0.001|False|False|base_plate,post_l,post_r,rail_l,rail_r,cap_plate
+  grasp_witness:
+    post_l:
+      certification_level: L2
+      arm: lft
+      gids:
+      - 312
+      - 260
+      - 168
+      - 296
+      preferred_gid: 312
+      rot_name: fs_01_y080
+      staging_pos:
+      - 0.0284999996647
+      - 0.205000000335
+      - 0.0254806608351
+      staging_rotmat: *id001
+      source: bsfs_crf_backward_seed0.json
+    rail_l:
+      certification_level: L2
+      arm: lft
+      gids:
+      - 218
+      preferred_gid: 218
+      rot_name: fs_02_y100
+      staging_pos:
+      - 0.44549999962
+      - -0.21199999962
+      - 0.02600000076
+      staging_rotmat: *id002
+      source: bsfs_crf_backward_seed0.json
+  per_step_certification:
+    cap_plate:
+      pid: cap_plate
+      certified: false
+      reason: below_threshold
+      rot_name: rot90_08_y160
+      yaw_deg: 160.0
+      xy:
+      - 0.447499999948
+      - 0.213999999948
+    rail_r:
+      pid: rail_r
+      certified: false
+      reason: below_threshold
+      rot_name: fs_01_y100
+      yaw_deg: 100.0
+      xy:
+      - 0.191100000076
+      - -0.21199999962
+    rail_l:
+      pid: rail_l
+      xy:
+      - 0.44549999962
+      - -0.21199999962
+      rot_name: fs_02_y100
+      pose_tag: fs_yaw
+      arm: lft
+      gids:
+      - 218
+      footprint:
+      - 0.0618073167217
+      - 0.0489145974788
+      common_grasp_count: 1
+      manipulability: 0.0245039952374
+      clearance: 0.254399999544
+      dist_to_goal: 0.524622616043
+      cost: 1.25896159095
+      cost_lb: 0.525042749909
+      certified: true
+      yaw_deg: 100.0
+    post_r:
+      pid: post_r
+      certified: false
+      reason: below_threshold
+      rot_name: fs_03_y120
+      yaw_deg: 120.0
+      xy:
+      - 0.274500000067
+      - -0.0410000000671
+    post_l:
+      pid: post_l
+      xy:
+      - 0.0284999996647
+      - 0.205000000335
+      rot_name: fs_01_y080
+      pose_tag: fs_yaw
+      arm: lft
+      gids:
+      - 312
+      - 260
+      - 168
+      - 296
+      footprint:
+      - 0.0640950395209
+      - 0.0733422113337
+      common_grasp_count: 4
+      manipulability: 0.00650664592547
+      clearance: 0.11806307127
+      dist_to_goal: 0.0910103779962
+      cost: 0.825526940173
+      cost_lb: 0.0930719348116
+      certified: true
+      yaw_deg: 80.0
+  grasp_robustness:
+    per_step_common_grasp_count:
+      rail_l: 1
+      post_l: 4
+    min_common_grasp_count: 1
