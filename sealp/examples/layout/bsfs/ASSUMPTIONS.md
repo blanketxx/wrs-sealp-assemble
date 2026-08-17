@@ -30,6 +30,21 @@ re-evaluate a certified suffix.
 conversely; dead-end suffixes exist. That is why we keep multiple nodes plus Hall
 matching + domain propagation, not a single greedy suffix.
 
+## Required-motion collision masks (`W_req` / `F_{k,j}`)
+
+Implemented in `req_motion_masks.py` and applied in `StepOracle.certify`
+(default on; `--no-req-motion-masks` disables):
+
+1. **post-grasp retreat** — attached-object mesh swept along pick depart (+Z)
+2. **prescribed insertion** — attached-object mesh swept along mating approach
+3. **post-release retreat** — under-approx EE capsule along mating depart
+   (beam only; exact mode disables this over-approx so A* hard-prunes stay sound)
+
+A hit against an already-assigned *later* staging part is a deterministic
+`req_motion_mask` hard-prune. Forward search also shrinks undecided later
+`(x,y)` domains by the same forbidden sets. Non-intersection does **not** prove
+local feasibility; L1/L2/L3 still run.
+
 ## Assumptions (must hold for the guarantees below)
 
 - **A1. Fixed assembly order.** `pi` is input and unchanged during search.

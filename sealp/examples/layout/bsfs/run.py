@@ -74,7 +74,7 @@ from sealp.examples.layout.infer_assembly_ga import (
 )
 from sealp.examples.layout.bsfs.search import search_site, rec_jsonable
 from sealp.examples.layout.bsfs.oracle import StepOracle
-from sealp.examples.layout.bsfs.cost import CostParams
+from sealp.examples.layout.bsfs.cost import CostParams, cost_params_from_args
 from sealp.examples.layout.bsfs.seeding import (
     center_id, seed_everything, task_seed,
 )
@@ -134,7 +134,25 @@ def parse_args(argv=None):
     p.add_argument("--exact-cell-cap", type=int, default=0)
     p.add_argument("--discrete-domain", action="store_true")
     p.add_argument("--do-quick-check", action="store_true")
-    p.add_argument("--swept-prune", action="store_true")
+    # Paper §IV-C required-motion collision masks (W_req / F_{k,j}). On by default.
+    p.add_argument("--req-motion-masks", action=argparse.BooleanOptionalAction,
+                   default=True,
+                   help="Reject placements whose prescribed pick-depart / insertion "
+                        "/ post-release volumes intersect later staging parts.")
+    p.add_argument("--req-motion-samples", type=int, default=5,
+                   help="Samples along each attached-object W_req segment.")
+    p.add_argument("--req-motion-post-release",
+                   action=argparse.BooleanOptionalAction, default=True,
+                   help="Include under-approx post-release capsule in W_req "
+                        "(beam default on; exact mode forces off).")
+    p.add_argument("--req-motion-release-radius", type=float, default=0.015,
+                   help="Under-approx EE radius (m) for post-release capsule.")
+    # Legacy XY transfer-corridor prune (NOT paper W_req); off by default.
+    p.add_argument("--transfer-corridor-prune", action="store_true",
+                   help="Exact-mode only: also block earlier cells on the "
+                        "staging->goal XY corridor (legacy; not paper W_req).")
+    p.add_argument("--swept-prune", action="store_true",
+                   help=argparse.SUPPRESS)  # legacy alias -> transfer-corridor-prune
     p.add_argument("--enable-order-x", action="store_true")
     # final precise filtering: z-yaw sampling on the stable flatsurface poses
     p.add_argument("--yaw-step-deg", type=float, default=20.0,
@@ -158,7 +176,11 @@ def parse_args(argv=None):
     p.add_argument("--seed", type=int, default=0,
                    help="Global base seed; all task seeds derive deterministically from it.")
     p.add_argument("--output-json", default="")
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    # Legacy --swept-prune maps to the non-paper transfer-corridor prune.
+    if bool(getattr(args, "swept_prune", False)):
+        args.transfer_corridor_prune = True
+    return args
 
 
 def _cfg_tag(args) -> str:
@@ -461,8 +483,7 @@ def robust_evaluate_layout(searcher, assign, preassembled_pid, center, args,
 def _final_certification(searcher, args, assign, center, preassembled_pid) -> Dict[str, Dict]:
     """Re-run StepOracle.certify along the pick order on the FINAL poses so the
     saved per-step record (grasp ids/arm/clearance/manip/cost) matches exactly."""
-    params = CostParams(lift=float(args.lift), tau_clear=float(args.tau_clear),
-                        tau_manip=float(args.tau_manip))
+    params = cost_params_from_args(args, mode=getattr(args, "mode", "beam"))
     oracle = StepOracle(searcher, params)
     searcher._set_assembly_station(np.asarray(center, dtype=float))
     _ensure_all_yaw(searcher, assign)
@@ -659,9 +680,9 @@ def _init_worker(args_ns):
         os.environ[var] = "1"
     _W["args"] = args_ns
     _W["searcher"] = _build_searcher(args_ns)
-    _W["oracle"] = StepOracle(_W["searcher"], CostParams(
-        lift=float(args_ns.lift), tau_clear=float(args_ns.tau_clear),
-        tau_manip=float(args_ns.tau_manip)))
+    _W["oracle"] = StepOracle(
+        _W["searcher"],
+        cost_params_from_args(args_ns, mode=getattr(args_ns, "mode", "beam")))
 
 
 def _worker_center(center) -> Dict:

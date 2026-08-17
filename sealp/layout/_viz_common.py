@@ -95,6 +95,62 @@ def _table_corner_leg_centers(
     ]
 
 
+def attach_table_corner_legs(
+    base,
+    extent,
+    pos,
+    *,
+    floor_z: float = DEFAULT_TABLE_FLOOR_Z,
+    rgb: Optional[Sequence[float]] = None,
+    alpha: float = 1.0,
+    leg_width: Optional[float] = None,
+) -> List:
+    """Attach four corner table legs under a box tabletop (visual only).
+
+    Legs span from ``floor_z`` up to the underside of the tabletop box defined
+    by ``extent`` / ``pos`` (center + full XYZ lengths, same as work_table).
+    """
+    extent = np.asarray(extent, dtype=float).reshape(3)
+    pos = np.asarray(pos, dtype=float).reshape(3)
+    size_x, size_y, thickness = map(float, extent[:3])
+
+    table_bottom_z = float(pos[2] - thickness / 2.0)
+    leg_height = table_bottom_z - float(floor_z)
+    if leg_height <= 1e-6:
+        print(
+            f"[WARN] table_floor_z={floor_z:.4f} is not below tabletop bottom "
+            f"z={table_bottom_z:.4f}; skip table legs."
+        )
+        return []
+
+    if leg_width is None:
+        leg_width = min(0.055, 0.10 * min(size_x, size_y))
+    leg_width = max(float(leg_width), 0.03)
+    inset = max(0.035, 0.8 * leg_width)
+    x_off = size_x / 2.0 - inset
+    y_off = size_y / 2.0 - inset
+    leg_z = float(floor_z + leg_height / 2.0)
+    rgb_arr = np.asarray(
+        TABLE_VIS_RGB if rgb is None else rgb[:3], dtype=float
+    ).reshape(3)
+
+    attached: List = []
+    for sx in (-1.0, 1.0):
+        for sy in (-1.0, 1.0):
+            leg = mgm.gen_box(
+                xyz_lengths=[leg_width, leg_width, leg_height],
+                pos=np.array(
+                    [pos[0] + sx * x_off, pos[1] + sy * y_off, leg_z],
+                    dtype=float,
+                ),
+                rgb=rgb_arr,
+                alpha=float(alpha),
+            )
+            leg.attach_to(base)
+            attached.append(leg)
+    return attached
+
+
 def build_pegboard_grid_centers(
     extent,
     pos,

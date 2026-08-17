@@ -43,9 +43,10 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from sealp.examples.layout.bsfs.cost import CostParams, lex_key
+from sealp.examples.layout.bsfs.cost import cost_params_from_args, lex_key
 from sealp.examples.layout.bsfs.domain import continuous_domain, discrete_domain, build_staging_grid
 from sealp.examples.layout.bsfs.oracle import HARD_FAIL, StepOracle
+from sealp.examples.layout.bsfs.req_motion_masks import filter_xy_by_w_req, part_xy_radius
 from sealp.examples.layout.bsfs.search import _iter_rot
 from sealp.examples.layout.bsfs.seeding import center_id, seed_everything, task_seed
 
@@ -62,6 +63,44 @@ LAST_RUN_STATS: Dict[str, float] = {"complete_leaves": 0}
 
 def _assembly_index(pick_order: List[str]) -> Dict[str, int]:
     return {pid: i for i, pid in enumerate(pick_order)}
+
+
+def _filter_xy_by_decided_w_req(searcher, pid: str, xys: List[np.ndarray],
+                                decided: Dict[str, Dict], pick_order: List[str],
+                                params) -> List[np.ndarray]:
+    """Forward-only: drop ``pid`` candidates inside ``F_{k,pid}`` of decided earlier parts."""
+    if not xys or not decided:
+        return list(xys)
+    aidx = _assembly_index(pick_order)
+    k_idx = aidx.get(pid)
+    if k_idx is None:
+        return list(xys)
+    inflate = part_xy_radius(searcher, pid)
+    out = list(xys)
+    for q, rec in decided.items():
+        q_idx = aidx.get(q)
+        if q_idx is None or q_idx >= k_idx:
+            continue
+        cand = None
+        for c in searcher.rot_cands.get(q, []) or []:
+            if str(getattr(c, "rot_name", "")) == str(rec.get("rot_name", "")):
+                cand = c
+                break
+        if cand is None:
+            continue
+        xy = np.asarray(rec["xy"], dtype=float)
+        sp = np.array([float(xy[0]), float(xy[1]), float(cand.z_offset)], dtype=float)
+        sr = np.asarray(cand.rotmat, dtype=float)
+        gp, gr = searcher.world_poses[q]
+        out = filter_xy_by_w_req(
+            out, searcher, q, sp, sr, gp, gr,
+            include_post_release=bool(params.req_motion_post_release),
+            release_radius=float(params.req_motion_release_radius),
+            inflate=inflate,
+        )
+        if not out:
+            break
+    return out
 
 
 def _scene_for_step(pid: str, decided: Dict[str, Dict], pick_order: List[str],
@@ -167,12 +206,9 @@ def experimental_search_site(searcher, args, station, mode, stats, verbose=True,
     if not pick_order:
         return []
 
-    params = CostParams(
-        lift=float(getattr(args, "lift", 0.10)),
-        tau_clear=float(getattr(args, "tau_clear", 0.005)),
-        tau_manip=float(getattr(args, "tau_manip", 1.0e-3)),
-    )
+    params = cost_params_from_args(args, mode=getattr(args, "mode", "beam"))
     oracle = StepOracle(searcher, params)
+    use_masks = bool(getattr(params, "use_req_motion_masks", True))
     base_seed = int(getattr(args, "seed", 0))
     cid = center_id(station)
     station_xy = np.asarray(station, dtype=float)[:2]
@@ -223,7 +259,17 @@ def experimental_search_site(searcher, args, station, mode, stats, verbose=True,
                 placed_list, applied, staged_list, n_absent = _scene_for_step(
                     pid, decided, pick_order, preassembled_pid, order, state_model,
                     station_xy, searcher, prior=prior)
-                for xi, xy in enumerate(cand_xy[pid]):
+                # Paper F_{k,j}: in forward order, shrink later-part domains by
+                # required-motion masks of already-decided earlier parts.
+                xys = cand_xy[pid]
+                if use_masks and order.startswith("forward"):
+                    xys = _filter_xy_by_decided_w_req(
+                        searcher, pid, xys, decided, pick_order, params)
+                    if len(xys) < len(cand_xy[pid]):
+                        stats["req_motion_domain_prunes"] = (
+                            stats.get("req_motion_domain_prunes", 0)
+                            + (len(cand_xy[pid]) - len(xys)))
+                for xi, xy in enumerate(xys):
                     if any(float(np.linalg.norm(np.asarray(xy)[:2] - s[:2])) < 0.02
                            for s in occupied):
                         continue

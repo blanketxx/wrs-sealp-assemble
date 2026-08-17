@@ -8,7 +8,7 @@
 功能：
 1. 读取 .layout 文件；
 2. 读取 .asmdef 文件；
-3. 显示 46×23 真实贯穿孔洞洞板 work_table，桌面透明度固定为 1；
+3. 显示 46×23 真实贯穿孔洞洞板 work_table（四角桌腿），桌面透明度固定为 1；
 4. 只显示左机械臂 home 姿态，不显示右机械臂；
 5. 显示每个零件的初始 staging 位置；
 6. 如果某个零件是 preassembled，例如 base_plate，则以实心模型显示在装配区；
@@ -66,7 +66,11 @@ from sealp.assembly_sequence import AssemblyDef
 from sealp.layout import WorkspaceLayout
 from sealp.config import load_config
 from sealp.colliders import StaticEnvironment
-from sealp.layout._viz_common import load_table_box
+from sealp.layout._viz_common import (
+    DEFAULT_TABLE_FLOOR_Z,
+    attach_table_corner_legs,
+    load_table_box,
+)
 
 
 # 兼容旧版/搜索脚本生成的 .layout：
@@ -104,7 +108,10 @@ HOME_JV = np.zeros(6)
 PERFORATED_TABLE_LONG_HOLES = 46
 PERFORATED_TABLE_SHORT_HOLES = 23
 PERFORATED_TABLE_HOLE_SEGMENTS = 16
-PERFORATED_TABLE_HOLE_DIAMETER = None  # None: 自动取较小孔距的 42%
+PERFORATED_TABLE_HOLE_DIAMETER = None  # None: 自动取较小孔距的 50%
+PERFORATED_TABLE_HOLE_PITCH_FRAC = 0.50  # 自动孔径 = frac * min_pitch（原 0.42，略放大）
+PERFORATED_TABLE_WITH_LEGS = True
+PERFORATED_TABLE_FLOOR_Z = DEFAULT_TABLE_FLOOR_Z
 
 
 def make_model(mesh_path: str, rgba=None):
@@ -239,7 +246,7 @@ def _build_perforated_table_mesh(
     min_pitch = min(pitch_x, pitch_y)
 
     hole_diameter = (
-        0.42 * min_pitch
+        float(PERFORATED_TABLE_HOLE_PITCH_FRAC) * min_pitch
         if PERFORATED_TABLE_HOLE_DIAMETER is None
         else float(PERFORATED_TABLE_HOLE_DIAMETER)
     )
@@ -332,11 +339,24 @@ def _attach_perforated_table(
 
     table.attach_to(base)
 
+    if PERFORATED_TABLE_WITH_LEGS:
+        legs = attach_table_corner_legs(
+            base,
+            extent=extent,
+            pos=pos,
+            floor_z=float(PERFORATED_TABLE_FLOOR_Z),
+            rgb=rgba_arr[:3] if rgba_arr.size >= 3 else None,
+            alpha=1.0,
+        )
+    else:
+        legs = []
+
     print(
         "[TABLE] perforated work_table: "
         f"{info['nx']}x{info['ny']}={info['hole_count']} holes, "
         f"diameter={info['hole_diameter'] * 1000.0:.2f} mm, "
-        f"alpha=1.0, watertight={info['watertight']}"
+        f"alpha=1.0, legs={len(legs)}, floor_z={float(PERFORATED_TABLE_FLOOR_Z):.3f}, "
+        f"watertight={info['watertight']}"
     )
     return table
 
@@ -471,7 +491,7 @@ def attach_robot_home(base, layout: WorkspaceLayout, show_robot: bool = True):
         pass
 
     try:
-        robot.lft_arm.gen_meshmodel(alpha=0.32).attach_to(base)
+        robot.lft_arm.gen_meshmodel(alpha=1.0).attach_to(base)
         print(
             f"[ROBOT] LEFT arm only, home at "
             f"{np.round(robot_base_pos, 4).tolist()}"
@@ -500,9 +520,12 @@ def attach_goal_ghosts(base, asm: AssemblyDef, world_poses: Dict, show_goal_ghos
             continue
 
         gp, gr = pose
-        cm = make_model(mesh_path, rgba=[0.70, 0.70, 0.70, 0.18])
-        cm.pos = np.asarray(gp, dtype=float)
-        cm.rotmat = np.asarray(gr, dtype=float)
+        gp = np.asarray(gp, dtype=float)
+        gr = np.asarray(gr, dtype=float)
+        # 目标装配虚影：无勾线，颜色加深以便看清装配体
+        cm = make_model(mesh_path, rgba=[0.35, 0.35, 0.35, 0.42])
+        cm.pos = gp
+        cm.rotmat = gr
         cm.attach_to(base)
 
         print(f"ghost {pid:14s}: pos={np.round(gp, 4).tolist()}")
@@ -516,15 +539,16 @@ def attach_initial_layout(base, asm: AssemblyDef, layout: WorkspaceLayout, part_
     grasp_counts = _metadata_map(layout, "grasp_counts")
     topdown_counts = _metadata_map(layout, "topdown_counts_identity")
 
+    staging_alpha = 0.8
     colors = [
-        np.array([0.90, 0.45, 0.35, 0.88]),
-        np.array([0.20, 0.60, 0.95, 0.88]),
-        np.array([0.25, 0.80, 0.45, 0.88]),
-        np.array([0.95, 0.60, 0.20, 0.88]),
-        np.array([0.75, 0.35, 0.85, 0.88]),
-        np.array([0.20, 0.85, 0.85, 0.88]),
-        np.array([0.85, 0.85, 0.30, 0.88]),
-        np.array([0.65, 0.65, 0.95, 0.88]),
+        np.array([0.90, 0.45, 0.35, staging_alpha]),
+        np.array([0.20, 0.60, 0.95, staging_alpha]),
+        np.array([0.25, 0.80, 0.45, staging_alpha]),
+        np.array([0.95, 0.60, 0.20, staging_alpha]),
+        np.array([0.75, 0.35, 0.85, staging_alpha]),
+        np.array([0.20, 0.85, 0.85, staging_alpha]),
+        np.array([0.85, 0.85, 0.30, staging_alpha]),
+        np.array([0.65, 0.65, 0.95, staging_alpha]),
     ]
 
     print("\n========== Initial Layout / Staging ==========")
@@ -551,7 +575,7 @@ def attach_initial_layout(base, asm: AssemblyDef, layout: WorkspaceLayout, part_
         preassembled = _is_preassembled(pid, layout, part_order)
 
         if preassembled:
-            rgba = np.array([0.40, 0.78, 0.42, 0.95])
+            rgba = np.array([0.40, 0.78, 0.42, staging_alpha])
         else:
             rgba = colors[i % len(colors)]
 
@@ -562,7 +586,7 @@ def attach_initial_layout(base, asm: AssemblyDef, layout: WorkspaceLayout, part_
 
         if show_frames:
             try:
-                mgm.gen_frame(pos=pos, rotmat=rot, ax_length=0.04).attach_to(base)
+                mgm.gen_frame(pos=pos, rotmat=rot, ax_length=0.07).attach_to(base)
             except Exception:
                 pass
 
@@ -592,7 +616,11 @@ def main():
     parser.add_argument("--show-goal-ghosts", action="store_true", help="显示最终目标 ghost；默认不显示")
     parser.add_argument("--hide-robot", action="store_true", help="不显示左机械臂 home 姿态")
     parser.add_argument("--hide-env", action="store_true", help="不显示洞洞板 work_table 等环境")
-    parser.add_argument("--show-frames", action="store_true", help="显示装配中心和零件坐标系；默认不显示")
+    parser.add_argument(
+        "--hide-frames",
+        action="store_true",
+        help="隐藏装配中心和零件坐标系；默认显示",
+    )
     parser.add_argument(
         "--cam-pos",
         default="1.05,-1.25,0.85",
@@ -634,7 +662,8 @@ def main():
         lookat_pos=assembly_pos + np.array([0.0, 0.0, 0.10]),
     )
 
-    if args.show_frames:
+    show_frames = not args.hide_frames
+    if show_frames:
         mgm.gen_frame(
             pos=assembly_pos,
             rotmat=assembly_rot,
@@ -658,14 +687,14 @@ def main():
         show_goal_ghosts=args.show_goal_ghosts,
     )
 
-    attach_initial_layout(base, asm, layout, part_order, show_frames=args.show_frames)
+    attach_initial_layout(base, asm, layout, part_order, show_frames=show_frames)
 
     print("\n提示：")
     print("  绿色实心模型通常表示 preassembled，例如 base_plate。")
     print("  彩色模型表示 layout 中的初始 staging 零件。")
-    print("  默认只显示：左机械臂 + 洞洞板 + 初始布局零件。")
+    print("  默认显示：左机械臂 + 洞洞板 + 初始布局零件 + 坐标系。")
     print("  --show-goal-ghosts 可额外显示最终目标 ghost。")
-    print("  --show-frames 可额外显示坐标系。")
+    print("  --hide-frames 可隐藏坐标系。")
 
     base.run()
 

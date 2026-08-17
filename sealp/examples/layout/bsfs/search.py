@@ -33,6 +33,7 @@ from .domain import (
 from .oracle import HARD_FAIL, StepOracle
 from .pruning import (
     hall_feasible,
+    part_footprint_radius,
     propagate_domains,
     swept_segment_mask,
 )
@@ -167,12 +168,16 @@ def _search_exact(searcher, oracle, args, pick_order, preassembled_pid,
                     continue
                 rec["cell"] = c_idx
                 # occupancy + sound domain propagation for the remaining parts
+                # (earlier in assembly order). W_req / F_{k,j} applies to *later*
+                # parts and is enforced inside StepOracle.certify — not here.
                 occ = node["occ"].clone()
                 occ.occupy(grid.footprint_mask(c_idx, foot_radius[pid]))
                 remaining = list(pick_order[:k - 1])
                 block = 0
-                if getattr(args, "swept_prune", False):
-                    block = swept_segment_mask(grid, xy, goal_xy[pid], foot_radius[pid])
+                # Legacy optional XY transfer-corridor prune (NOT paper W_req).
+                if getattr(args, "transfer_corridor_prune", False):
+                    block = swept_segment_mask(
+                        grid, xy, goal_xy[pid], part_footprint_radius(searcher, pid))
                 cells2 = propagate_domains(remaining, node["cells"], occ,
                                            foot_radius, extra_block_mask=block)
                 if cells2 is None:
@@ -363,7 +368,7 @@ def search_site(searcher, args, station: np.ndarray, mode: str,
     serially. Both paths seed each ``StepOracle.certify`` by stable task identity
     so results are independent of process scheduling.
     """
-    from .cost import CostParams
+    from .cost import cost_params_from_args
     searcher._set_assembly_station(np.asarray(station, dtype=float))
     searcher._apply_first_part_as_assembled()
     first_pid = searcher._first_part_id()
@@ -372,11 +377,7 @@ def search_site(searcher, args, station: np.ndarray, mode: str,
     if not pick_order:
         return []
 
-    params = CostParams(
-        lift=float(getattr(args, "lift", 0.10)),
-        tau_clear=float(getattr(args, "tau_clear", 0.005)),
-        tau_manip=float(getattr(args, "tau_manip", 1.0e-3)),
-    )
+    params = cost_params_from_args(args, mode=mode)
     oracle = StepOracle(searcher, params)
     base_seed = int(getattr(args, "seed", 0))
     cid = center_id(station)

@@ -26,7 +26,8 @@ Modules
 - ``cost``    : RRT-free cost model (keypose polyline length) + admissible LB.
 - ``oracle``  : layered per-step feasibility phi_k (L0-L3) wrapping the searcher.
 - ``domain``  : candidate domains D_k (continuous + discrete grid) + occupancy.
-- ``pruning`` : Hall-matching feasibility, domain propagation, swept-volume masks.
+- ``pruning`` : Hall-matching feasibility, domain propagation.
+- ``req_motion_masks`` : paper ``W_req`` / ``F_{k,j}`` prescribed-motion masks.
 - ``search``  : backward OPEN-list controller (exact A*/BB + anytime beam).
 - ``run``     : CLI + per-site parallelism + final forward certification.
 """

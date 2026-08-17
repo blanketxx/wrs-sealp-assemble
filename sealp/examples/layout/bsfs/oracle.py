@@ -25,11 +25,13 @@ from find_optimal_initial_layout_tower_strict_pycharm import PickPlacePlanner
 from sealp.layout.layout_robot_factory import get_layout_arm
 
 from .cost import CostParams, step_cost, step_lb, passes_thresholds
+from .req_motion_masks import forbidden_later_parts
 
 # deterministic (cacheable / hard-prunable) failure reasons
 HARD_FAIL = frozenset({
     "arm_keepout", "upright_constraint", "pair_collision", "mesh_clearance",
     "home_collision", "home_clearance", "no_common_gids", "no_grasp_collection",
+    "req_motion_mask",   # later staging part intersects W_req (paper F_{k,j})
 })
 UNPROVEN = "unproven"    # L3 RRT timeout etc. -- never hard-prune (A7)
 
@@ -116,6 +118,21 @@ class StepOracle:
         gp, gr = s.world_poses[pid]
         gp = np.asarray(gp, dtype=float)
         gr = np.asarray(gr, dtype=float)
+
+        # ---- Required-motion collision masks W_req / F_{k,j} (paper) ----
+        # Cheap sound necessary check against already-assigned later staging
+        # parts before grasp reasoning / L2. Disabled via CostParams.
+        if getattr(self.params, "use_req_motion_masks", True):
+            hits = forbidden_later_parts(
+                s, pid, sp, sr, gp, gr, staged_pids,
+                n_samples=int(getattr(self.params, "req_motion_samples", 5)),
+                include_post_release=bool(
+                    getattr(self.params, "req_motion_post_release", True)),
+                release_radius=float(
+                    getattr(self.params, "req_motion_release_radius", 0.015)),
+            )
+            if hits:
+                return None, "req_motion_mask"
 
         # ---- L1 kinematics / common grasp ------------------------
         gc = s._grasp_collection(pid)

@@ -21,10 +21,10 @@
    - 会继续尝试后续零件；
    - 最后播放所有成功规划出来的步骤动画；
    - 同时显示初始布局、目标 ghost、已成功装配的零件。
-4. 每个零件都是 **单臂**：先试强制 Cartesian 直线 approach/depart 的 pick-place，全部失败后
-   兜底改用 ``DirectTransportPrimitive``（同一只手臂、同一个 grasp，取放段用 RRT 连接，不生成
-   强制直线段，不换手、不中途放下）。双臂换手默认关闭，仅 ``--middle-plate-handover`` 时才
-   启用，届时需要预生成 ``tower_handover/middle_plate_hopg.pickle``。
+4. 每个零件都是 **单臂**：先试强制 Cartesian 直线 approach/depart 的 pick-place；默认失败后
+   再兜底 ``DirectTransportPrimitive``（RRT 自由段）。加 ``--no-direct-transport`` 则只用严格
+   PickPlace、不回退 DirectTransport（chair 推荐）。双臂换手默认关闭，仅
+   ``--middle-plate-handover`` 时启用。
 5. 默认使用 **box（AABB 包围盒）** 做避障碰撞，比 mesh/triangles 更快、更保守。
    - 需要更精细碰撞可传 ``--cdprim-type triangles``。
 6. 接触零件自动判定，不写死零件名：``auto_detect_mating_parts`` 用 asmdef parent + 最终 goal
@@ -160,7 +160,7 @@ LINEAR_FREE_TAG = "linear_free"
 DUAL_ARM_Y_OFFSET = 0.6
 HOME_JV = np.zeros(6)
 
-APPROACH_DIST = 0.0
+APPROACH_DIST = 0.05
 PICK_DEPART_DIST = 0.03
 PLACE_APPROACH_DIST = 0.03
 PLACE_DEPART_DIST = 0.03
@@ -1333,14 +1333,15 @@ def _motion_candidate_kwargs(place_approach_dir, place_depart_dir, *,
 
 
 def _plan_candidates(asm: AssemblyDef, pid: str, goal_rotmat, *,
-                     skip_place_depart: bool = False):
-    """本步要依次尝试的规划方案: 装配轴上的强制直线, 然后无直线段规划。
+                     skip_place_depart: bool = False,
+                     allow_direct_transport: bool = True):
+    """本步要依次尝试的规划方案: 装配轴上的强制直线, 可选再接 DirectTransport。
 
     以前这里会把纯 Z 加上四个水平偏置方向轮流试一遍。那五个方向都是凭空猜的世界方向,
     跟装配体怎么装没有关系; 而每个失败的方向都要把整套 grasp 的直线段 IK 重算一遍
-    (middle_plate 单个方向就能跑掉几十分钟)。既然 asmdef 已经写明了插接轴, 就只试它,
-    过不了直接交给 DirectTransportPrimitive —— 后者本来就不受"沿线每点都要有 IK"的约束,
-    它才是这类零件真正能解出来的那条路。
+    (middle_plate 单个方向就能跑掉几十分钟)。既然 asmdef 已经写明了插接轴, 就只试它;
+    默认失败后再交给 DirectTransportPrimitive。``allow_direct_transport=False`` 时
+    只保留严格 PickPlace（强制 Cartesian approach/depart），不再回退 RRT 自由段。
     """
     approach, depart, from_asmdef = _mating_dirs_or_default(asm, pid, goal_rotmat)
     tag = "asmdef_axis" if from_asmdef else "topdown_default"
@@ -1349,8 +1350,14 @@ def _plan_candidates(asm: AssemblyDef, pid: str, goal_rotmat, *,
           f"({'asmdef 声明' if from_asmdef else '未声明, 回退到 -Z 放下'})")
     cartesian = _motion_candidate_kwargs(approach, depart,
                                          skip_place_depart=skip_place_depart)
-    return [(tag, cartesian),
-            (LINEAR_FREE_TAG, {"place_depart_direction_list": [_unit_vec(depart)]})]
+    out = [(tag, cartesian)]
+    if allow_direct_transport:
+        out.append(
+            (LINEAR_FREE_TAG, {"place_depart_direction_list": [_unit_vec(depart)]})
+        )
+    else:
+        print(f"    [严格PPP] {pid}: 已禁用 DirectTransport 回退")
+    return out
 
 
 def _last_assembly_part_id(part_order: List[str], layout: WorkspaceLayout) -> Optional[str]:
@@ -1840,6 +1847,7 @@ class LayoutSequenceVisualizer:
         symmetry_rel_tol: float = 0.0025,
         symmetry_abs_tol: float = 2.0e-4,
         max_auto_symmetries: int = 12,
+        allow_direct_transport: bool = True,
     ):
         self.asm = asm
         self.layout = layout
@@ -1858,6 +1866,8 @@ class LayoutSequenceVisualizer:
         self.symmetry_rel_tol = float(symmetry_rel_tol)
         self.symmetry_abs_tol = float(symmetry_abs_tol)
         self.max_auto_symmetries = max(1, int(max_auto_symmetries))
+        # False: 只跑严格 PickPlace（强制 Cartesian approach/depart），不回退 DirectTransport。
+        self.allow_direct_transport = bool(allow_direct_transport)
         self.enable_middle_plate_regrasp = bool(enable_middle_plate_regrasp)
         self._middle_plate_hopg = os.path.join(
             handover_dir or DEFAULT_HANDOVER_DIR, "middle_plate_hopg.pickle"
@@ -2599,7 +2609,10 @@ class LayoutSequenceVisualizer:
         print(f"\n[PLAN] pid={pid}, preferred_arm={preferred_arm}, try_order={arm_order}")
 
         plan_candidates = _plan_candidates(
-            self.asm, pid, gr, skip_place_depart=(pid == self._last_assembly_pid))
+            self.asm, pid, gr,
+            skip_place_depart=(pid == self._last_assembly_pid),
+            allow_direct_transport=self.allow_direct_transport,
+        )
 
         for arm_tag in arm_order:
             arm = get_layout_arm(self.robot, arm_tag, single_arm=self.single_arm_mode)
@@ -2628,6 +2641,15 @@ class LayoutSequenceVisualizer:
 
                 self._maybe_debug_obstacles(pid, placed, transit_obs, placement_obs)
 
+                # 必须显式从 HOME 起步，否则 PickPlace/ADPlanner 在 start_jnt_values=None
+                # 时会直接从 pick approach 起点开始，动画会从 home 一下子跳到预抓取位，
+                # 看不到 home→接近 的 RRT 中间过程。
+                start_jv = np.asarray(HOME_JV, dtype=float)
+                try:
+                    _goto_arm(arm, start_jv)
+                except Exception:
+                    pass
+
                 try:
                     if motion_tag == LINEAR_FREE_TAG:
                         # 无强制 Cartesian 直线段的单臂规划: 同一只手臂、同一个 grasp,
@@ -2648,6 +2670,7 @@ class LayoutSequenceVisualizer:
                             goal_pose_list=[(np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))],
                             obstacle_list=transit_obs,
                             grasp_obstacle_list=placement_obs,
+                            start_jnt_values=start_jv,
                             end_jnt_values=_direct_end_jv,
                             **direct_transport_seating_kwargs(
                                 self.mating_parts(pid, placed), transit_obs),
@@ -2665,6 +2688,7 @@ class LayoutSequenceVisualizer:
                                 goal_pose_list=[(np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))],
                                 obstacle_list=transit_obs,
                                 grasp_obstacle_list=placement_obs,
+                                start_jnt_values=start_jv,
                                 approach_distance=APPROACH_DIST,
                                 depart_distance=PICK_DEPART_DIST,
                                 linear_granularity=LINEAR_GRANULARITY,
@@ -2677,6 +2701,7 @@ class LayoutSequenceVisualizer:
                                 grasp_collection=gc,
                                 goal_pose_list=[(np.asarray(gp, dtype=float), np.asarray(gr, dtype=float))],
                                 obstacle_list=transit_obs,
+                                start_jnt_values=start_jv,
                                 approach_distance=APPROACH_DIST,
                                 depart_distance=PICK_DEPART_DIST,
                                 linear_granularity=LINEAR_GRANULARITY,
@@ -2982,6 +3007,7 @@ def _motion_cache_fingerprint(
     symmetry_rel_tol: float = 0.0025,
     symmetry_abs_tol: float = 2.0e-4,
     max_auto_symmetries: int = 12,
+    allow_direct_transport: bool = True,
 ) -> str:
     """用关键输入生成缓存指纹，避免 layout/asmdef 改了还误用旧路径。"""
     meta = {
@@ -2999,6 +3025,8 @@ def _motion_cache_fingerprint(
         "symmetry_rel_tol": float(symmetry_rel_tol),
         "symmetry_abs_tol": float(symmetry_abs_tol),
         "max_auto_symmetries": int(max_auto_symmetries),
+        "allow_direct_transport": bool(allow_direct_transport),
+        "start_from_home": True,
         "pick_depart_dist": float(PICK_DEPART_DIST),
         "place_depart_dist": float(PLACE_DEPART_DIST),
         "skip_place_depart_last": True,
@@ -3631,6 +3659,13 @@ def _parse_args():
         default=12,
         help="每个零件最多保留的已验证对称变换数量（含 identity），默认 12。",
     )
+    parser.add_argument(
+        "--no-direct-transport",
+        action="store_true",
+        help="禁用 DirectTransport(RRT 自由段)回退，全程只用严格 PickPlace"
+             "（强制 Cartesian approach/depart）。chair 等希望更严路径时使用。"
+             "注意：TransportPrimitive 内部 home↔抓取/搬运 的 RRT 转移仍会启用。",
+    )
     return parser.parse_args()
 
 
@@ -3673,6 +3708,9 @@ def main():
           f"rel_tol={float(getattr(args, 'symmetry_rel_tol', 0.0025))} "
           f"abs_tol={float(getattr(args, 'symmetry_abs_tol', 2.0e-4))} "
           f"max={int(getattr(args, 'max_auto_symmetries', 12))}")
+    allow_direct = not bool(getattr(args, "no_direct_transport", False))
+    print(f"allow_direct_transport = {allow_direct}  "
+          f"# False=只用严格 PickPlace，不回退 DirectTransport")
     print("=" * 78)
 
     asm = AssemblyDef.load(asmdef_path)
@@ -3708,6 +3746,7 @@ def main():
         symmetry_rel_tol=float(getattr(args, "symmetry_rel_tol", 0.0025)),
         symmetry_abs_tol=float(getattr(args, "symmetry_abs_tol", 2.0e-4)),
         max_auto_symmetries=int(getattr(args, "max_auto_symmetries", 12)),
+        allow_direct_transport=allow_direct,
     )
     runner.debug_obstacles = bool(getattr(args, "debug_obstacles", False))
     runner.debug_part = str(getattr(args, "debug_part", "") or "").strip()
@@ -3741,6 +3780,7 @@ def main():
         symmetry_rel_tol=float(getattr(args, "symmetry_rel_tol", 0.0025)),
         symmetry_abs_tol=float(getattr(args, "symmetry_abs_tol", 2.0e-4)),
         max_auto_symmetries=int(getattr(args, "max_auto_symmetries", 12)),
+        allow_direct_transport=allow_direct,
     )
     print(f"motion_cache = {cache_path}")
     print(f"cache_fp     = {fingerprint}")

@@ -124,7 +124,7 @@ class PantheraHT(mi.ManipulatorInterface):
         self.jlc.jnts[5].loc_pos = np.array([0.02345, 0.0, -0.039])
         self.jlc.jnts[5].loc_rotmat = rm.rotmat_from_euler(0.0, np.pi / 2.0, 0.0)
         self.jlc.jnts[5].loc_motion_ax = np.array([0.0, 0.0, 1.0])
-        self.jlc.jnts[5].motion_range = np.array([-3, 3])
+        self.jlc.jnts[5].motion_range = np.array([-2.5, 2.5])
         self._urdf_to_wrs_flange_rotmat = rm.rotmat_from_euler(0.0, np.pi / 2.0, 0.0)
         self.jlc.jnts[5].lnk.loc_pos = np.array([0.0, 0.0, 0.0])
         self.jlc.jnts[5].lnk.loc_rotmat = rm.rotmat_from_euler(0.0, 0.0, 0.0)

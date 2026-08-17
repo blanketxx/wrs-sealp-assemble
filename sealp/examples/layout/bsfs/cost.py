@@ -47,6 +47,11 @@ class CostParams:
     tau_manip: float = DEFAULT_TAU_MANIP
     include_empty_arm: bool = True
     home_tcp: Optional[np.ndarray] = None   # (3,) world xyz of the arm home TCP
+    # Required-motion collision masks (paper W_req / F_{k,j}); on by default.
+    use_req_motion_masks: bool = True
+    req_motion_samples: int = 5
+    req_motion_post_release: bool = True
+    req_motion_release_radius: float = 0.015
 
 
 def _v3(p: Sequence[float]) -> np.ndarray:
@@ -83,6 +88,25 @@ def step_cost(sp: Sequence[float], gp: Sequence[float],
 def step_lb(sp: Sequence[float], gp: Sequence[float]) -> float:
     """Admissible lower bound on ``step_cost``: straight-line pick->place chord."""
     return float(np.linalg.norm(_v3(sp) - _v3(gp)))
+
+
+def cost_params_from_args(args, *, mode: Optional[str] = None) -> CostParams:
+    """Build ``CostParams`` from a CLI / experiment args namespace."""
+    params = CostParams(
+        lift=float(getattr(args, "lift", DEFAULT_LIFT)),
+        tau_clear=float(getattr(args, "tau_clear", DEFAULT_TAU_CLEAR)),
+        tau_manip=float(getattr(args, "tau_manip", DEFAULT_TAU_MANIP)),
+        use_req_motion_masks=bool(getattr(args, "req_motion_masks", True)),
+        req_motion_samples=int(getattr(args, "req_motion_samples", 5)),
+        req_motion_post_release=bool(
+            getattr(args, "req_motion_post_release", True)),
+        req_motion_release_radius=float(
+            getattr(args, "req_motion_release_radius", 0.015)),
+    )
+    # Exact A*: hard-prune only on sound attached-object sweeps.
+    if mode == "exact":
+        params.req_motion_post_release = False
+    return params
 
 
 def passes_thresholds(clearance: float, manip: float, params: CostParams) -> bool:

@@ -8,9 +8,11 @@ provably incompatible with the current partial suffix:
     the current suffix cannot be extended to a full layout -> prune.
   * ``propagate_domains`` -- forward-checking: occupy the newly fixed part's
     footprint cells; any earlier part whose domain becomes empty -> prune.
-  * ``swept_segment_mask`` -- cells inside the prescribed carried-object transfer
-    corridor of a certified step (optional hard-prune; only sound for the
-    prescribed linear transfer, never for an arbitrary RRT path -- A7).
+  * ``swept_segment_mask`` -- legacy XY transfer-corridor cells (optional via
+    ``--transfer-corridor-prune``; NOT the paper ``W_req`` masks).
+
+Paper required-motion masks (``W_req`` / ``F_{k,j}``) live in
+``req_motion_masks.py`` and are applied inside ``StepOracle.certify``.
 """
 
 from __future__ import annotations

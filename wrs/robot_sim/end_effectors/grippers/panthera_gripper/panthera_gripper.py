@@ -265,7 +265,5 @@ if __name__ == "__main__":
     gripper = PantheraGripper(cdmesh_type=mcm.const.CDMeshType.OBB)
     gripper.change_jaw_width(0.04)
     print(f"Current jaw width: {gripper.get_jaw_width():.3f} m")
-    # gripper.gen_stickmodel().attach_to(base)
-    gripper.gen_meshmodel(toggle_cdprim=True, toggle_tcp_frame=True, alpha=1.0).attach_to(base)
-
+    gripper.gen_meshmodel(toggle_cdprim=False, toggle_tcp_frame=False, alpha=1.0).attach_to(base)
     base.run()

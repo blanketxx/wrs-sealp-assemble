@@ -1,16 +1,21 @@
 # -*- coding: utf-8 -*-
 """
-Replay a planned tower motion .pkl on the real Panthera-HT arm(s).
+Replay a planned tower motion .pkl on the real Fafu / Panthera-HT arm(s).
 
-This is the "run on hardware" entry point that pairs with
-``execute_layout_sequence_visual.py`` (which produces the .pkl).  It reads
-the per-arm joint trajectories from the .pkl and plays them back through
-:meth:`FafuRobotController.move_jntspace_path` (gripper open/close handled
-at width-change boundaries by ``run_motion_pkl`` / ``replay_dual_arm_motion_pkl``).
+This is the **hardware** entry point that pairs with
+``execute_layout_sequence_visual.py`` (which produces the .pkl).
+Do **not** use ``sequence_execution.py`` for this — that script is a
+YuanChair / Piper **simulation** demo and does not drive the Fafu arm.
+
+Playback uses ``fafu_arm_sdk`` ``FafuRobotController`` (same stack as
+``tests/test_fafu_motion_interactive.py``): ``move_j`` / ``move_jntspace_path``
+plus gripper open/close at pkl jaw-width boundaries
+(``motion_pkl_hw.run_motion_pkl``).
 
 IMPORTANT
 ---------
-* Use the Python 3.10 env that matches the cp310 driver, e.g.::
+* Use the Python env that matches the SDK ``fafu_motor`` wheel
+  (cp310 or cp312), e.g.::
 
       D:\\Soft\\tools\\anaconda\\envs\\spatialvla\\python.exe -m sealp.examples.motion.replay_tower_on_robot --help
 
@@ -22,8 +27,7 @@ IMPORTANT
 
 Examples
 --------
-# 0) offline plan check (no hardware needed for parsing, but constructing a
-#    controller opens the serial port -- so this still needs the arm):
+# 0) offline plan check (still opens the serial port when constructing the controller):
 python -m sealp.examples.motion.replay_tower_on_robot --arm lft
 
 # 1) single left arm, low speed, go home first, then actually move:
@@ -41,38 +45,289 @@ import math
 import os
 import sys
 import time
+import threading
 
 import numpy as np
 
 # Make the repo root importable when run as a file (python path/to/this.py).
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from wrs.robot_con.panthera_ht.fafu_robot_controller import (  # noqa: E402
-    FafuRobotController,
+# Prefer fafu_arm_sdk (native fafu_motor + RobotCore.move_j). Fall back to the
+# legacy wrs.robot_con.panthera_ht copy only if the SDK is not beside this repo.
+_SDK_CANDIDATES = [
+    os.environ.get("FAFU_ARM_SDK"),
+    os.path.abspath(os.path.join(_REPO_ROOT, "..", "fafu_arm_sdk-main")),
+    os.path.abspath(os.path.join(_REPO_ROOT, "..", "fafu_arm_sdk")),
+]
+_SDK_ROOT = next(
+    (p for p in _SDK_CANDIDATES if p and os.path.isdir(os.path.join(p, "fafu_robot_python"))),
+    None,
+)
+if _SDK_ROOT and _SDK_ROOT not in sys.path:
+    sys.path.insert(0, _SDK_ROOT)
+
+try:
+    from fafu_robot_python import FafuRobotController  # noqa: E402
+except Exception:
+    try:
+        # Legacy: put fafu_robot_python/ itself on path.
+        if _SDK_ROOT:
+            _py = os.path.join(_SDK_ROOT, "fafu_robot_python")
+            if _py not in sys.path:
+                sys.path.insert(0, _py)
+        from fafu_robot_controller import FafuRobotController  # type: ignore  # noqa: E402
+    except Exception:
+        from wrs.robot_con.panthera_ht.fafu_robot_controller import (  # noqa: E402
+            FafuRobotController,
+        )
+
+from sealp.examples.motion.motion_pkl_hw import (  # noqa: E402
     load_motion_pkl,
     extract_arm_segments,
     replay_dual_arm_motion_pkl,
+    run_motion_pkl,
     apply_jaw_close_delta,
     should_home_after_part,
     _resolve_home_between,
     _split_path_by_gripper,
 )
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_DEFAULT_PKL = os.path.join(_HERE, "_output", "tower_optimal_initial_motions.pkl")
-_DEFAULT_CFG = os.path.join(
-    _REPO_ROOT, "wrs", "robot_con", "panthera_ht", "robot.cfg"
+_DEFAULT_PKL = os.path.join(_HERE, "_output", "p4v2_tower_noupright_motions.pkl")
+_DEFAULT_CFG = (
+    os.path.join(_SDK_ROOT, "fafu_robot_python", "robot.cfg")
+    if _SDK_ROOT
+    else os.path.join(_REPO_ROOT, "wrs", "robot_con", "panthera_ht", "robot.cfg")
 )
 
 
-def _build_arm(cfg_path: str, port: str | None, gripper_id: int | None):
-    return FafuRobotController(
-        cfg_path=cfg_path,
-        port=port,
-        has_gripper=gripper_id is not None,
-        gripper_motor_id=gripper_id,
+def _build_arm(
+    cfg_path: str,
+    port: str | None,
+    gripper_id: int | None,
+    *,
+    auto_enable: bool = True,
+):
+    """Construct controller; retry a few times on flaky motor precheck.
+
+    ``auto_enable=False`` is used by --no-gripper-action hard-isolation mode:
+    the controller first connects without energising position control, then the
+    replay explicitly enables only the arm joints and verifies that M7 did not
+    become ACTIVE.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            return FafuRobotController(
+                cfg_path=cfg_path,
+                port=port,
+                has_gripper=gripper_id is not None,
+                gripper_motor_id=gripper_id,
+                auto_enable=auto_enable,
+            )
+        except RuntimeError as exc:
+            last_exc = exc
+            msg = str(exc)
+            if "did not respond" not in msg and "motors" not in msg:
+                raise
+            print(f"[replay] connect/precheck failed (attempt {attempt}/3): {exc}")
+            if attempt < 3:
+                time.sleep(0.5 * attempt)
+    assert last_exc is not None
+    raise last_exc
+
+
+
+def _read_gripper_state(ctrl):
+    """Read M7 state without commanding gripper motion."""
+    if not getattr(ctrl, "has_gripper", False):
+        return None
+    mid = getattr(ctrl, "_gripper_motor_id", None)
+    ht = getattr(ctrl, "_ht", None)
+    if mid is None or ht is None:
+        return None
+    return ht.read_motor_state(int(mid), 0.3)
+
+
+def _verify_gripper_isolated(ctrl, stage: str) -> None:
+    """Fail closed if M7 becomes ACTIVE while --no-gripper-action is requested.
+
+    This function only reads state.  On an isolation violation the caller
+    closes the controller with BRAKE before any replay motion is attempted.
+    """
+    state = _read_gripper_state(ctrl)
+    if state is None:
+        print(f"[replay] [gripper-isolation] {stage}: no M7 state available")
+        return
+
+    mode = int(getattr(state, "mode", -1))
+    pos = float(getattr(state, "position", float("nan")))
+    vel = float(getattr(state, "velocity", float("nan")))
+    tq = float(getattr(state, "torque", float("nan")))
+    fault = int(getattr(state, "fault", -1))
+
+    print(
+        f"[replay] [gripper-isolation] {stage}: "
+        f"M7 mode={mode} pos={pos:.4f} vel={vel:.4f} "
+        f"torque={tq:.1f} fault={fault}"
+    )
+
+    mode_position = int(getattr(ctrl, "MODE_POSITION", 0x0A))
+    if mode == mode_position:
+        raise RuntimeError(
+            "[replay] --no-gripper-action isolation violated: "
+            "M7 entered POSITION/ACTIVE mode. Aborting before trajectory motion."
+        )
+    if fault != 0:
+        raise RuntimeError(
+            f"[replay] M7 fault={fault}; aborting before trajectory motion."
+        )
+
+
+
+class _CachedMotorMonitor:
+    """Read-only cached motor-state logger.
+
+    This thread never sends motor commands. It only inspects the async feedback
+    cache already maintained by the controller so we can see whether the sound
+    comes from M7 or from one of M1~M6 while go_home/move_j is blocking.
+    """
+
+    def __init__(self, ctrl, *, period_s: float = 0.2):
+        self.ctrl = ctrl
+        self.period_s = max(0.05, float(period_s))
+        self._stop = threading.Event()
+        self._thread = None
+        self._t0 = 0.0
+
+    def start(self):
+        if self._thread is not None:
+            return
+        self._t0 = time.monotonic()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="fafu-cached-motor-monitor",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+        self._thread = None
+
+    def _run(self):
+        ht = getattr(self.ctrl, "_ht", None)
+        mids = list(getattr(self.ctrl, "all_motor_ids", []))
+        if ht is None or not mids:
+            print("[motor-monitor] unavailable")
+            return
+
+        while not self._stop.wait(self.period_s):
+            fields = []
+            for mid in mids:
+                try:
+                    s = ht.get_cached_state(int(mid))
+                except Exception as exc:
+                    fields.append(f"M{mid}:ERR({type(exc).__name__})")
+                    continue
+                if s is None:
+                    fields.append(f"M{mid}:none")
+                    continue
+                mode = int(getattr(s, "mode", -1))
+                pos = float(getattr(s, "position", float("nan")))
+                vel = float(getattr(s, "velocity", float("nan")))
+                tq = float(getattr(s, "torque", float("nan")))
+                fault = int(getattr(s, "fault", -1))
+                fields.append(
+                    f"M{mid}[m={mode},p={pos:+.4f},v={vel:+.3f},"
+                    f"tq={tq:+.1f},f={fault}]"
+                )
+            dt = time.monotonic() - self._t0
+            print(f"[motor-monitor {dt:6.2f}s] " + " ".join(fields))
+
+
+def _wait_for_feedback_ready(
+    ctrl,
+    arm_side: str,
+    *,
+    timeout_s: float = 3.0,
+    poll_s: float = 0.15,
+) -> np.ndarray:
+    """在任何真机运动前等待 M1~M6 的实时反馈进入 ready 状态。
+
+    目的：
+    1) controller 构造完成后，先主动同步读取一次真实关节角；
+    2) 给后台 transport / polling 留出建立 fresh-feedback 的时间；
+    3) 用 check_alive(fresh=True) 确认所有关节反馈正常；
+    4) 若在 timeout_s 内仍未 ready，则停止进入运动阶段并报错。
+
+    这里不修改 SDK 的 500 ms stale-feedback 安全阈值。
+    """
+    timeout_s = max(0.5, float(timeout_s))
+    poll_s = max(0.05, float(poll_s))
+    deadline = time.monotonic() + timeout_s
+    last_exc = None
+    last_q = None
+
+    print(
+        f"[replay] [{arm_side}] waiting for fresh motor feedback "
+        f"(timeout={timeout_s:.1f}s) ..."
+    )
+
+    # 先留一小段时间让 start_transport() 的后台接收/轮询线程真正启动。
+    time.sleep(min(0.25, timeout_s / 2.0))
+
+    while time.monotonic() < deadline:
+        try:
+            # 强制同步读取真实关节角，不只依赖刚建立的缓存。
+            q_now = np.asarray(
+                ctrl.get_joint_values(prefer_cache=False),
+                dtype=float,
+            )
+            last_q = q_now
+
+            if (
+                q_now.ndim == 1
+                and q_now.size == int(getattr(ctrl, "num_joints", q_now.size))
+                and np.all(np.isfinite(q_now))
+            ):
+                # 给同步读取后的缓存/transport 一个很短的刷新窗口。
+                time.sleep(min(poll_s, 0.15))
+
+                if bool(ctrl.check_alive(fresh=True)):
+                    print(
+                        f"[replay] [{arm_side}] feedback ready; "
+                        "current joints(deg)="
+                        + np.array2string(
+                            np.degrees(q_now),
+                            precision=2,
+                            suppress_small=True,
+                        )
+                    )
+                    return q_now
+
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+
+        time.sleep(poll_s)
+
+    detail = f"; last error: {last_exc}" if last_exc is not None else ""
+    if last_q is not None:
+        detail += (
+            "; last q(deg)="
+            + np.array2string(
+                np.degrees(last_q),
+                precision=2,
+                suppress_small=True,
+            )
+        )
+    raise RuntimeError(
+        f"[replay] [{arm_side}] motor feedback did not become ready "
+        f"within {timeout_s:.1f}s{detail}"
     )
 
 
@@ -180,13 +435,26 @@ def _do_key_poses(ctrl, seg, arm_side: str, *, speed: int, dry_run: bool,
         jaw_txt = ""
         if grip and jaw_w is not None and np.isfinite(jaw_w):
             jaw_txt = f"  jaw={float(jaw_w) * 1000:.1f}mm"
+        grip_note = ""
+        if grip:
+            act = "闭合(抓住)" if grip == "close" else "张开(放下)"
+            if do_grip:
+                grip_note = f"  ->  夹爪{act}{jaw_txt}"
+            else:
+                grip_note = f"  ->  夹爪{act}{jaw_txt}  [跳过: --no-gripper-action]"
         print(f"      [{arm_side}] {label} 关节角(度)={_fmt_deg(jv_frame)}"
-              + (f"  ->  夹爪{'闭合(抓住)' if grip == 'close' else '张开(放下)'}{jaw_txt}"
-                 if grip else ""))
+              + grip_note)
         if dry_run:
             continue
-        # 逐点阻塞式: 先走到关键位, 到位后再动夹爪, 然后停顿一下(便于观察 / 让夹爪稳)。
-        ctrl.move_j(jv_frame, is_radians=True, speed=speed, block=True)
+        # 关键位移用更长 settle / 稍松容差，避免大跨度 move_j 1s 超时。
+        ctrl.move_j(
+            jv_frame,
+            is_radians=True,
+            speed=speed,
+            block=True,
+            tolerance=0.05,
+            settle_timeout=10.0,
+        )
         if do_grip and grip in ("close", "open"):
             ctrl.actuate_gripper_from_pkl(
                 grip, jaw_w, part_id=seg.get("part_id", ""), arm_side=arm_side,
@@ -348,9 +616,18 @@ def main() -> None:
                     help="运行时再把 pkl 里夹持宽度(非张开位)加上此增量(米)。"
                          "默认 0(直接用 pkl 原值); 若 pkl 未用 adjust_pkl_jaw_close 收紧, "
                          "可填 -0.01 临时再紧 1cm。")
+    ap.add_argument("--feedback-timeout", type=float, default=3.0,
+                    help="真机运动前等待 M1~M6 fresh feedback 的最长时间(秒), 默认 3.0。")
+    ap.add_argument("--feedback-poll", type=float, default=0.15,
+                    help="等待 fresh feedback 时的轮询间隔(秒), 默认 0.15。")
+    ap.add_argument("--motor-monitor", action="store_true",
+                    help="只读打印 M1~M7 缓存的 mode/position/velocity/torque/fault，"
+                         "用于定位 go_home/move_j 啸叫来源；不发送额外电机命令。")
+    ap.add_argument("--motor-monitor-period", type=float, default=0.2,
+                    help="--motor-monitor 打印周期(秒)，默认 0.2。")
     ap.add_argument("--run", action="store_true", help="actually move (default: dry-run only)")
     ap.add_argument("--no-gripper-action", action="store_true",
-                    help="do not open/close the gripper during replay")
+                    help="hard-isolate the gripper: M7 must remain non-ACTIVE; abort before motion if arm enable touches M7")
     args = ap.parse_args()
 
     if not os.path.isfile(args.pkl):
@@ -389,8 +666,49 @@ def main() -> None:
     home_between = _parse_home_between(args.home_between)
 
     if args.arm == "dual":
-        lft = _build_arm(args.cfg_lft or args.cfg, args.port_lft, gripper_id)
-        rgt = _build_arm(args.cfg_rgt or args.cfg, args.port_rgt, gripper_id)
+        hard_gripper_isolation = bool(args.no_gripper_action and gripper_id is not None)
+        lft = _build_arm(
+            args.cfg_lft or args.cfg, args.port_lft, gripper_id,
+            auto_enable=not hard_gripper_isolation,
+        )
+        rgt = _build_arm(
+            args.cfg_rgt or args.cfg, args.port_rgt, gripper_id,
+            auto_enable=not hard_gripper_isolation,
+        )
+
+        # 真实运动前先确认左右臂实时反馈已经 ready。
+        if not dry_run:
+            _wait_for_feedback_ready(
+                lft,
+                "lft",
+                timeout_s=args.feedback_timeout,
+                poll_s=args.feedback_poll,
+            )
+            _wait_for_feedback_ready(
+                rgt,
+                "rgt",
+                timeout_s=args.feedback_timeout,
+                poll_s=args.feedback_poll,
+            )
+            if hard_gripper_isolation:
+                try:
+                    _verify_gripper_isolated(lft, "lft before arm.enable()")
+                    _verify_gripper_isolated(rgt, "rgt before arm.enable()")
+                    lft.enable()
+                    rgt.enable()
+                    _verify_gripper_isolated(lft, "lft after arm.enable()")
+                    _verify_gripper_isolated(rgt, "rgt after arm.enable()")
+                except Exception:
+                    for ctrl in (lft, rgt):
+                        try:
+                            ctrl.close_connection(
+                                joint_release="brake",
+                                gripper_release="brake",
+                            )
+                        except Exception:
+                            pass
+                    raise
+
         if args.home or args.home_only:
             if dry_run:
                 print(f"[replay] (dry-run) would go_home both arms @ speed={home_speed}")
@@ -425,7 +743,59 @@ def main() -> None:
         lft.close_connection(joint_release=args.end_release)
         rgt.close_connection(joint_release=args.end_release)
     else:
-        arm = _build_arm(args.cfg, args.port, gripper_id)
+        # --no-gripper-action is a hard isolation mode:
+        # connect without auto-enable so M7 cannot be energised as a side
+        # effect of controller construction.  Arm joints are enabled explicitly
+        # only after M7 has been verified non-ACTIVE.
+        hard_gripper_isolation = bool(args.no_gripper_action and gripper_id is not None)
+        arm = _build_arm(
+            args.cfg,
+            args.port,
+            gripper_id,
+            auto_enable=not hard_gripper_isolation,
+        )
+        motor_monitor = (
+            _CachedMotorMonitor(arm, period_s=args.motor_monitor_period)
+            if args.motor_monitor
+            else None
+        )
+
+        # 真实运动前主动刷新一次关节反馈，并确认 RobotCore 的反馈 freshness。
+        # 解决 controller 刚 start_transport() 后立即 go_home/move_j 时偶发
+        # "stale motor feedback: M1 ... M6 (limit=500ms)" 的启动时序问题。
+        if not dry_run:
+            _wait_for_feedback_ready(
+                arm,
+                args.arm,
+                timeout_s=args.feedback_timeout,
+                poll_s=args.feedback_poll,
+            )
+            if motor_monitor is not None:
+                print("[motor-monitor] START (read-only cache monitor)")
+                motor_monitor.start()
+            if hard_gripper_isolation:
+                # Before enabling arm joints, M7 must already be non-ACTIVE.
+                try:
+                    _verify_gripper_isolated(arm, "before arm.enable()")
+                    arm.enable()
+                    # Critical proof: v3 RobotCore.enable() must affect M1~M6 only.
+                    _verify_gripper_isolated(arm, "after arm.enable()")
+                except Exception:
+                    try:
+                        arm.close_connection(
+                            joint_release="brake",
+                            gripper_release="brake",
+                        )
+                    finally:
+                        raise
+            elif getattr(arm, "has_gripper", False) and hasattr(arm, "park_gripper_idle"):
+                # Gripper-enabled runs may use the controller's own idle policy.
+                # --no-gripper-action never calls this unknown/high-level helper.
+                try:
+                    arm.park_gripper_idle()
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[replay] park gripper skipped: {exc}")
+
         if args.home or args.home_only:
             if dry_run:
                 print(f"[replay] (dry-run) would go_home @ speed={home_speed}")
@@ -441,8 +811,8 @@ def main() -> None:
                                home_between=home_between,
                                home_between_speed=args.home_between_speed)
         else:
-            arm.run_motion_pkl(
-                args.pkl, args.arm, speed=args.speed, dry_run=dry_run,
+            run_motion_pkl(
+                arm, args.pkl, args.arm, speed=args.speed, dry_run=dry_run,
                 actuate_gripper=not args.no_gripper_action,
                 step_pause_s=args.step_pause,
                 key_pause_s=args.key_pause,
@@ -459,6 +829,9 @@ def main() -> None:
             else:
                 print(f"[replay] 全部零件完成, 回到 home (end) @ speed={home_speed}")
                 arm.go_home(speed=home_speed)
+        if motor_monitor is not None:
+            motor_monitor.stop()
+            print("[motor-monitor] STOP")
         arm.close_connection(joint_release=args.end_release)
 
     print("[replay] done.")
