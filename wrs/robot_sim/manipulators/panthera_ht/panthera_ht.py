@@ -57,7 +57,7 @@ class PantheraHT(mi.ManipulatorInterface):
         self.jlc.anchor.lnk_list[0].cmodel.rgba = rgba_base
 
         # ---------------- Joint 1: base_link -> link1 ----------------
-        self.jlc.jnts[0].loc_pos = np.array([0.0, 0.0, 0.0584])
+        self.jlc.jnts[0].loc_pos = np.array([0.0, 0.0, 0.0634])
         self.jlc.jnts[0].loc_rotmat = rm.rotmat_from_euler(0.0, 0.0, 0.0)
         self.jlc.jnts[0].loc_motion_ax = np.array([0.0, 0.0, 1.0])
         self.jlc.jnts[0].motion_range = np.array([-2.4, 2.4])
